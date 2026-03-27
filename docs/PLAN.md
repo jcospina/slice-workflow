@@ -1,0 +1,685 @@
+# Plan: `slice` CLI — AI Workflow Orchestrator
+
+## Context
+
+The user has a proven "slice-based workflow" methodology for breaking large dev tasks into vertical slices executed by AI agents with fresh context windows. Two real implementations exist as references (decouple-data-layer, income-tracking). The goal is to build a CLI tool that automates the entire workflow: from requirement gathering through autonomous slice execution to PR creation and feedback handling.
+
+## What We're Building
+
+A TypeScript CLI tool called `slice`, installable via `npm install -g slice` / `npx slice`, that orchestrates this workflow:
+
+```text
+slice                         # Opens the terminal UI (TUI)
+slice resume --pr 123         # Resume from PR feedback
+
+TUI Flow:
+    |
+    +-- User writes initial prompt in a comfortable editor view
+    +-- Phase 1: RFC Draft (interactive agent conversation)
+    +-- Approval Gate (user reviews RFC via Slack/Telegram or TUI)
+    +-- Phase 2: Draft Polish (autonomous agent refines RFC)
+    +-- Phase 3: Plan (autonomous agent creates slices, tracks, templates)
+    +-- Approval Gate (user reviews plan via Slack/Telegram or TUI)
+    +-- Phase 4: Execute Slices (sequential agents, each in own worktree)
+    |       +-- On merge conflict / error -> Slack/Telegram notification + pause
+    +-- Phase 5: Handoff (PR created with implementation notes)
+    |       +-- Slack/Telegram notification: PR ready for review
+    +-- Progress tracked in TUI throughout (current phase, slice, cost)
+```
+
+## Architecture Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Language | TypeScript/Node.js | Matches ecosystem, good CLI tooling |
+| Distribution | Global npm CLI | `npx slice start` works anywhere |
+| Primary runtime | Claude Code SDK (`@anthropic-ai/claude-agent-sdk`) | Free tool execution (file edit, bash, etc). Uses the user's existing Claude Code subscription -- no separate API key needed |
+| Secondary runtime | OpenCode SDK (`@opencode-ai/sdk`) | Supports 75+ models (OpenAI, Ollama, Gemini, local models). Has its own battle-tested tool execution layer -- no need to build custom tools |
+| Provider abstraction | `AgentRuntime` interface | Claude Code + OpenCode in v1, extensible to others |
+| Execution | Local subprocesses | Direct filesystem access, run tests locally |
+| Slice execution | Sequential (v1) | Simpler, parallel in v2 |
+| Human state | Filesystem (PROGRESS.md, tracks/) | Human-readable, agent-writable, git-trackable |
+| Machine state | SQLite via `better-sqlite3` at `.slice/slice.db` | Atomic writes, queryable, supports resumability, concurrent access safe for v2 parallelism |
+| Terminal UI | Ink (React for CLI) | React component model, `<Static>` for streaming agent output, first-class TypeScript. Claude Code itself uses Ink. Requires Node >= 22, React >= 19 |
+| Slice execution mode | `sliceExecution: 'autonomous' \| 'gated'` | Users choose whether slices run start-to-end or pause for approval after each slice |
+| Agent isolation | Git worktrees (orchestrator-managed) | Safety mechanism: each agent works in a worktree so destructive operations never touch the main working copy |
+| Post-slice review | Evaluator-optimizer loop | Separate reviewer agent checks changes against DoD, implementer fixes findings. Max iterations configurable |
+| Framework | Custom orchestration | Existing agent SDKs are meant for API-calling agents, not subprocess-based coding agents. |
+| Approval gates | Slack/Telegram interactive + TUI fallback | User can approve/reject/request changes from Slack, Telegram (async, mobile) or TUI (sync). No server deployment needed |
+| Notifications | Slack (Socket Mode) + Telegram (polling) | Bidirectional bots: send rich messages with buttons, receive responses. Both work locally without public URL |
+| PR feedback | GitHub Action on "Changes Requested" -> posts `slice resume --pr N` | Automated trigger, manual execution |
+| RFC phase | Interactive terminal (spawn `claude` or `opencode` with `stdio: inherit`) | Full agent UX for conversations |
+| Config | `.slicerc` (project) + `~/.slice/config.json` (global) | Per-project customization |
+| Git operations | Delegated to agents (within worktrees) | Agents handle branching, committing, and PR creation via their built-in bash/git tools. Orchestrator manages worktree lifecycle and verifies state |
+| Agent permissions | Full autonomy via SDK config | Claude SDK: `acceptEdits` + explicit `allowedTools`. OpenCode: `opencode run` auto-approves all tools in non-interactive mode |
+
+## Authentication & Provider Model
+
+**Claude Code runtime**: Uses the user's existing Claude Code installation and subscription. The SDK spawns the `claude` CLI as a subprocess, inheriting whatever auth is already configured (Claude Max subscription or API key in `claude`). No separate API key management needed.
+
+**OpenCode runtime**: Uses the user's existing OpenCode installation and configuration. OpenCode natively supports 75+ model providers -- the user configures their preferred model in OpenCode's own config (`opencode` CLI). Supports:
+
+- **OpenAI**: GPT-4o, etc.
+- **Anthropic**: Claude models (alternative to Claude Code SDK)
+- **Local models**: Ollama, LM Studio, llama.cpp
+- **Cloud providers**: Groq, Together, AWS Bedrock, Azure OpenAI, Google Gemini, OpenRouter
+
+This means all development/testing can run against local models at zero cost via OpenCode.
+
+## Project Structure
+
+```text
+slice/
++-- package.json
++-- tsconfig.json
++-- vitest.config.ts
++-- biome.json
++-- bin/
+|   +-- slice.ts                         # CLI entrypoint (hashbang)
++-- src/
+|   +-- cli/
+|   |   +-- index.ts                     # Commander setup, default command opens TUI
+|   |   +-- commands/
+|   |   |   +-- resume.ts               # slice resume --pr N
+|   |   |   +-- setup-github.ts         # slice setup-github
+|   |   +-- tui/                         # Terminal UI (Ink — React for CLI)
+|   |   |   +-- index.ts                # Ink render() entrypoint
+|   |   |   +-- app.tsx                 # Root React component
+|   |   |   +-- views/                  # TUI screens (prompt editor, progress, approvals)
+|   |   |   +-- components/             # Reusable Ink components
+|   |   +-- ui/
+|   |       +-- terminal.ts             # Colors, spinners, formatting (shared utils)
+|   |       +-- approval-gate.ts        # Approve/feedback/reject (TUI + messaging fallback)
+|   |
+|   +-- config/
+|   |   +-- index.ts                    # Load & merge global + project config
+|   |   +-- schema.ts                   # Zod validation schemas
+|   |   +-- types.ts                    # SliceConfig, GlobalConfig, ProjectConfig
+|   |
+|   +-- orchestrator/
+|   |   +-- index.ts                    # WorkflowOrchestrator -- main engine
+|   |   +-- phases/
+|   |   |   +-- types.ts               # Phase, PhaseResult, PhaseContext
+|   |   |   +-- rfc-draft.ts           # Interactive RFC generation
+|   |   |   +-- draft-polish.ts        # Autonomous RFC refinement
+|   |   |   +-- plan.ts               # Slice plan generation
+|   |   |   +-- execute.ts            # Sequential slice execution loop
+|   |   |   +-- handoff.ts            # PR creation
+|   |   |   +-- review.ts            # Post-slice review loop (evaluator-optimizer)
+|   |   +-- state-machine.ts          # Phase transitions
+|   |   +-- worktree.ts              # WorktreeManager — create, setup, cleanup worktrees
+|   |
+|   +-- runtime/
+|   |   +-- types.ts                   # AgentRuntime interface (THE core abstraction)
+|   |   +-- claude-code.ts             # ClaudeCodeRuntime (via @anthropic-ai/claude-agent-sdk)
+|   |   +-- opencode.ts               # OpenCodeRuntime (via @opencode-ai/sdk)
+|   |   +-- factory.ts                # Runtime factory
+|   |
+|   +-- prompts/
+|   |   +-- index.ts                  # Prompt builder
+|   |   +-- templates/
+|   |   |   +-- rfc-draft.ts          # RFC system prompt
+|   |   |   +-- draft-polish.ts       # Polish prompt
+|   |   |   +-- plan.ts              # Plan prompt (includes sample structure)
+|   |   |   +-- slice-execution.ts    # Per-slice prompt template
+|   |   |   +-- slice-review.ts      # Reviewer agent prompt (scoped to DoD)
+|   |   |   +-- slice-fix.ts         # Fix agent prompt (review findings)
+|   |   |   +-- handoff.ts           # PR/handoff prompt
+|   |   +-- context.ts               # Assembles context files into prompt blocks
+|   |
+|   +-- state/
+|   |   +-- index.ts                 # StateManager
+|   |   +-- db.ts                    # SQLite store (.slice/slice.db)
+|   |   +-- migrations.ts            # DB schema migrations
+|   |   +-- types.ts                 # WorkflowRun, PhaseRecord, SliceRecord
+|   |
+|   +-- messaging/
+|   |   +-- index.ts                 # MessagingManager -- dispatches to configured channels
+|   |   +-- types.ts                # MessagingConfig, ApprovalResult, NotificationEvent
+|   |   +-- slack/
+|   |   |   +-- index.ts            # SlackBot -- Bolt app with Socket Mode
+|   |   |   +-- approval.ts         # Slack interactive approvals (buttons + modals)
+|   |   |   +-- notifications.ts    # Slack notification formatting
+|   |   +-- telegram/
+|   |       +-- index.ts            # TelegramBot -- polling mode
+|   |       +-- approval.ts         # Telegram interactive approvals (inline keyboards)
+|   |       +-- notifications.ts    # Telegram notification formatting
+|   |
+|   +-- github/
+|   |   +-- action.ts                # GitHub Action YAML generator
+|   |   +-- resume-context.ts        # Fetch PR review context via gh
+|   |
+|   +-- utils/
+|       +-- logger.ts
+|       +-- errors.ts
+|       +-- fs.ts
+|
++-- templates/
+|   +-- github-action.yml            # PR feedback GH Action template
+|
++-- test/
+    +-- unit/
+    +-- integration/
+```
+
+## Core Interface: AgentRuntime
+
+This is the provider abstraction -- the most important interface in the codebase:
+
+```typescript
+interface AgentRuntime {
+  run(options: AgentRunOptions): Promise<AgentRunResult>;
+  runInteractive(options: AgentInteractiveOptions): Promise<AgentRunResult>;
+  readonly provider: string;  // 'claude-code' | 'opencode'
+}
+
+interface AgentRunOptions {
+  prompt: string;
+  systemPrompt?: string;
+  cwd: string;                    // Working directory
+  contextFiles?: string[];        // Files agent reads first
+  maxTurns?: number;
+  allowedTools?: string[];
+  onProgress?: (event: ProgressEvent) => void;
+}
+
+interface AgentRunResult {
+  success: boolean;
+  output: string;
+  sessionId: string;
+  costUsd: number;
+  durationMs: number;
+  error?: string;
+}
+```
+
+**ClaudeCodeRuntime**: Uses `@anthropic-ai/claude-agent-sdk` `query()` for autonomous phases. Spawns `claude` with `stdio: inherit` for interactive RFC phase. Uses the user's existing Claude Code subscription.
+
+**OpenCodeRuntime**: Uses `@opencode-ai/sdk` for programmatic control, or `opencode run "prompt"` for headless execution. For persistent workflows, can use `opencode serve` (HTTP server on port 4096) + SDK client to avoid cold boot per agent call. Supports structured output via JSON schema. For interactive RFC phase, spawns `opencode` with `stdio: inherit`.
+
+## Key Implementation Details
+
+### Context Management Strategy
+
+Each slice agent loads exactly 3 documents + explores code:
+
+1. **Plan doc** (`{slug}.md`) -- Goals, locked contracts, architecture. Static, set once.
+2. **PROGRESS.md** -- Key decisions record that grows naturally across slices. Captures the WHY behind choices. Not capped -- grows with signal, not noise.
+3. **Current track file** (`tracks/NN-*.md`) -- This slice's scope, DoD, validation. Lean.
+4. **Code** -- The agent explores the codebase to understand what exists. Code is the source of truth for WHAT was built.
+
+Previous track files are **never loaded by future agents**. They exist as a human-readable audit trail in git.
+
+This keeps agent context overhead constant regardless of how many slices have completed, while preserving full auditability for humans.
+
+### Track File Structure
+
+Track files serve two audiences: **agents** (pre-execution sections) and **humans** (post-execution sections).
+
+**Pre-execution (agent-facing, pre-filled by Plan phase):**
+
+- **Scope** -- What this slice touches (1-3 sentences)
+- **Likely Call Sites** -- Specific files/paths expected to be modified
+- **DoD (Definition of Done)** -- What success looks like for this slice
+- **Validation** -- What commands/checks to run for this slice
+- **Notes** -- Implementation guidelines or constraints specific to this slice
+
+**Post-execution (human-facing audit trail, filled during execution):**
+
+- **What Was Implemented** -- Detailed bullet list of what was done
+- **Key Decisions** -- Reasoning and trade-offs made during implementation
+- **Open Risks / Blockers** -- Known issues, deferred work, or dependencies on other slices
+
+Dropped from track files (derivable from git/CI, adds noise that can mislead agents):
+- ~~Touched Files~~ -- Use `git diff` or `git log`
+- ~~Validations Run + Results~~ -- Use CI pipeline output
+
+### PROGRESS.md as Key Decisions Record
+
+PROGRESS.md is not just a checkbox tracker -- it is the primary context carrier between slices. After each slice, the agent appends key decisions to PROGRESS.md. These are the constraints and choices that future agents need to respect.
+
+Structure:
+
+```markdown
+# Progress - {Project Name}
+
+## Current Focus
+- Slice NN - {name} (in progress)
+
+## Slice Status
+- [x] Slice 00 - Foundation
+- [x] Slice 01 - DB Schema
+- [ ] Slice 02 - Parser        <-- active
+- [ ] Slice 03 - Data Layer
+
+## Key Decisions
+### Slice 00
+- Chose facade pattern over direct imports because X
+- Boundary checker runs in lint pipeline, not as a separate CI step
+
+### Slice 01
+- Kept backward-compatible wrappers because X
+- entry_type defaults to 'expense' to avoid migration of existing rows
+```
+
+**No router section.** Track file links were removed because they are an "attractive nuisance" for agents -- an LLM seeing paths to all tracks will try to read them. Humans can trivially find tracks via `ls tracks/`. Four mechanisms prevent agents from reading other tracks:
+
+1. **No track links in PROGRESS.md** -- eliminates the most obvious path
+2. **Orchestrator controls `contextFiles`** -- only loads plan + PROGRESS.md + current track
+3. **Slice-execution prompt includes explicit instruction**: "Do NOT read other files in the tracks/ directory. They contain stale context from previous slices. Trust PROGRESS.md for accumulated decisions and the codebase for current state."
+4. **PROGRESS.md captures WHY (decisions), not WHAT (implementation summary)** -- the WHAT is visible from git and code
+
+Future agents read PROGRESS.md to understand accumulated constraints. They read code to understand what was built. They read their own track file to understand what to do next.
+
+### Git Strategy: Worktrees for Agent Isolation
+
+Git operations (branch, commit, push) are delegated to agents. But the orchestrator manages **worktree lifecycle** as a safety mechanism -- agents work in isolated copies so destructive operations never touch the main working directory.
+
+**Worktree lifecycle (orchestrator-managed):**
+
+1. **Create**: `git worktree add -b task/{slug}-{slice} .trees/{slug}-{slice} main`
+2. **Setup**: Install dependencies in worktree and copy .env files if applicable.
+3. **Spawn agent**: Set `cwd` to worktree path. Agent is unaware it's in a worktree.
+4. **Agent works**: Reads, writes, commits, pushes -- all within the worktree
+5. **Cleanup**: `git worktree remove .trees/{slug}-{slice}`
+
+**Convention**: `.trees/` directory in repo root (added to `.gitignore`)
+
+**Why worktrees over branches-only**: Branches provide no file isolation -- an agent running `rm -rf src/` on the main working copy is catastrophic. Worktrees contain the blast radius.
+
+**Gotchas handled by the orchestrator:**
+- Dependencies: `node_modules/` doesn't exist in new worktrees -- orchestrator runs setup step
+- Same branch: Git refuses to check out the same branch in two worktrees -- orchestrator always creates unique branches
+- Cleanup: Always use `git worktree remove`, never `rm -rf`. Run `git worktree prune` as recovery
+
+### Agent Permissions for Autonomous Execution
+
+Agents must run with full tool permissions to avoid blocking on approval prompts. Each runtime handles this differently:
+
+**Claude Code SDK:**
+```typescript
+{
+  allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
+  permissionMode: "acceptEdits",  // auto-approve file ops, Bash covered by allowedTools
+  cwd: worktreePath,              // isolated to worktree
+  maxTurns: 50,
+  maxBudgetUsd: 5.0,
+}
+```
+Uses `acceptEdits` + explicit `allowedTools` -- safer than `bypassPermissions` because only listed tools are auto-approved.
+
+**OpenCode:**
+- Non-interactive mode (`opencode run --dir <worktree> "prompt"`) auto-approves all permissions
+- Alternatively, set `"permission": "allow"` in project's `opencode.json`
+
+### Post-Slice Review Loop
+
+After each slice, an optional **reviewer agent** evaluates the changes against the slice's DoD. If issues are found, a new implementer agent receives the findings and fixes them. This follows the evaluator-optimizer pattern.
+
+```text
+Implementer Agent (slice N)
+    |
+    v
+[changes committed in worktree]
+    |
+    v
+Reviewer Agent (iteration 1)
+    |-- verdict: PASS --> continue to slice N+1
+    |-- verdict: FAIL + findings -->
+            |
+            v
+        Implementer Agent (fix iteration 1)
+            |
+            v
+        Reviewer Agent (iteration 2)
+            |-- PASS --> continue
+            |-- FAIL --> max iterations reached, escalate to human
+```
+
+**Reviewer input (scoped to prevent nitpicking):**
+- `git diff <before-sha>..<after-sha> -U10` -- only what changed
+- Current track file (DoD is the review rubric)
+- Plan doc excerpt (locked contracts, architecture constraints)
+- NOT PROGRESS.md, NOT previous tracks
+
+**Reviewer output (structured JSON):**
+```typescript
+interface ReviewResult {
+  verdict: 'PASS' | 'FAIL';
+  confidence: number;           // 0.0-1.0
+  findings: ReviewFinding[];
+  summary: string;
+}
+
+interface ReviewFinding {
+  severity: 'critical' | 'major' | 'minor';
+  file: string;
+  lineRange: [number, number];
+  title: string;
+  body: string;
+  dodItem: string;              // which DoD item this relates to
+}
+```
+
+**Anti-nitpick mechanisms:**
+- Reviewer prompt scoped to DoD items only, not general "code quality"
+- Only `critical` and `major` findings trigger fix iterations. `minor` findings logged but don't loop
+- Explicit instruction: "Only flag issues INTRODUCED by this diff. Do not flag pre-existing problems."
+- Optionally use a different (cheaper) model for review via `reviewProvider` config
+
+**Configuration:**
+```typescript
+review: {
+  enabled: boolean;               // default: true
+  maxIterations: number;          // default: 2
+  reviewProvider?: string;        // optional: use different provider for review
+  severityThreshold: 'critical' | 'major' | 'minor';  // default: 'major'
+}
+```
+
+Review results are stored in SQLite for auditability.
+
+### Plan Phase Output Validation
+
+The Plan agent must produce a specific folder structure. The orchestrator validates:
+
+- `implementations/{slug}/{slug}.md` exists (main plan doc with goals, contracts, slice roadmap)
+- `implementations/{slug}/PROGRESS.md` exists (with Key Decisions and Slice Status sections, no router)
+- `implementations/{slug}/tracks/` directory with track files matching the slice count
+- Each track file has at minimum: Scope and DoD sections pre-filled
+- Optionally: `implementations/{slug}/templates/` with execution checklists
+
+If validation fails, the agent is re-invoked with specific feedback about what's missing.
+
+### Prompt Construction
+
+Each phase builds prompts from 3 layers:
+
+1. **System prompt** -- Role, constraints, output format (TypeScript template functions in `src/prompts/templates/`)
+2. **Context block** -- Dynamically assembled from exactly 3 files: plan doc, PROGRESS.md, current track file. No previous track files loaded.
+3. **Task prompt** -- Specific instruction for this invocation
+
+The agent is expected to explore the codebase itself to understand what exists. The context files provide the WHY (decisions) and the WHAT TO DO (scope, DoD). The code provides the WHAT EXISTS.
+
+The Plan phase includes the two sample implementations (decouple-data-layer, income-tracking) bundled with the package as reference patterns.
+
+### Terminal UI (TUI) — Ink
+
+The default `slice` command (no arguments) opens a terminal UI built with **Ink** (React renderer for terminals). The TUI is the primary interface for:
+
+- **Prompt writing** -- A comfortable editor view for writing the initial task description (not cramped into a CLI arg). Supports multi-line editing via `ink-text-input`.
+- **Progress tracking** -- Live view of: current phase, current slice, elapsed time, cost so far. Updated in real-time via React state. Agent output streamed using Ink's `<Static>` component (renders permanently above the interactive UI, avoids re-render thrashing).
+- **Local approvals** -- When an approval gate is reached and messaging is not configured, the TUI shows the artifact and approval controls inline via `ink-select-input`.
+- **Workflow status** -- Overview of all active/completed workflows.
+
+The TUI delegates to Claude Code / OpenCode for agent interactions (those tools have their own UIs). The TUI is the orchestration dashboard, not an agent interface.
+
+**Key Ink components:**
+- `<Box>` -- Flexbox layout (Yoga engine, same as React Native)
+- `<Text>` -- Styled text (via chalk)
+- `<Static>` -- Permanent output above interactive UI (critical for streaming agent logs)
+- `ink-text-input` -- Text input with cursor
+- `ink-select-input` -- Arrow-key selectable lists (approval gates, menu)
+- `ink-spinner` -- Animated spinners (autonomous phase progress)
+- `fullscreen-ink` -- Alternate screen buffer for full TUI experience
+
+**Constraints:** Node >= 22, React >= 19, no native scrolling (manual or community package), Flexbox-only layout (no CSS Grid).
+
+### Messaging Integration (Slack + Telegram)
+
+The tool supports two messaging platforms for fully async, bidirectional communication. Both work locally without a public URL.
+
+**Slack (Socket Mode):**
+- Uses `@slack/bolt` with Socket Mode -- WebSocket connection, no public URL
+- Requirements: Slack App with Socket Mode enabled, App-level token (`xapp-...`), Bot token (`xoxb-...`)
+- Rich messages via Block Kit: buttons, modals for feedback
+- Message limit: 3000 chars per block, long content uploaded as file attachment
+
+**Telegram (Polling):**
+- Uses `telegraf` or `node-telegram-bot-api` with long polling -- no webhook, no public URL
+- Requirements: Bot token from @BotFather, chat ID for the target conversation
+- Interactive via inline keyboards: Approve/Request Changes/Reject buttons
+- On "Request Changes": bot asks for feedback in a reply
+- Message limit: 4096 chars per message, long content sent as document attachment
+
+**Abstraction:** Both platforms implement a `MessagingChannel` interface. The `MessagingManager` dispatches events to all configured channels. Either, both, or neither can be configured.
+
+**Interactive approval flow:**
+1. Orchestrator reaches an approval gate (RFC ready, Plan ready)
+2. MessagingManager sends to all configured channels:
+   - Plan/RFC content (formatted per platform)
+   - Three buttons: Approve, Request Changes, Reject
+3. User taps a button from their phone/desktop (Slack or Telegram)
+4. If "Request Changes": user provides feedback (Slack modal or Telegram reply)
+5. Response flows back to the running CLI
+6. Orchestrator continues (re-runs phase with feedback, or proceeds)
+7. First response wins -- if user responds on both Slack and Telegram, the first one is used
+
+**Notification events:**
+- `approval_gate_reached` -- RFC or Plan ready, buttons for approve/reject/changes
+- `slice_completed` -- Slice N finished, includes cost and duration (informational in autonomous mode)
+- `slice_approval_requested` -- Slice N done, awaiting approval to proceed (gated mode only). Buttons: Approve / Request Changes / Reject
+- `slice_failed` -- Slice N failed, includes error and a "Retry" button
+- `review_max_iterations` -- Review loop exhausted max iterations, escalate to human with remaining findings
+- `merge_conflict` -- Conflict details, files list, "I've resolved it" button
+- `workflow_completed` -- PR link, total cost, total duration
+- `workflow_error` -- Error details
+
+**Slice execution modes:**
+- `"autonomous"` (default): All slices run start-to-end. `slice_completed` sent as informational notification.
+- `"gated"`: After each slice, `slice_approval_requested` sent with interactive buttons. Orchestrator pauses until user approves, requests changes, or rejects. On crash during wait, SQLite records `awaiting_approval` state for resumability.
+
+**TUI fallback:** If no messaging platform is configured, approval gates and notifications are handled in the TUI. All paths return the same `ApprovalResult` type.
+
+### GitHub Action Flow
+
+1. User installs GH Action via `slice setup-github` (copies `templates/github-action.yml` -> `.github/workflows/slice-feedback.yml`)
+2. When a reviewer submits "Changes Requested" on a PR -> Action fires
+3. Action collects review comments + diff context via GitHub API
+4. Posts a comment: `slice resume --pr 123`
+5. User runs the command locally -> spawns agent with review context + implementation folder
+
+### State Management
+
+Two layers of state serving different purposes:
+
+**Human state** (filesystem -- agents read/write these):
+- `PROGRESS.md` -- Key decisions record with slice checkboxes (no router)
+- `tracks/*.md` -- Per-slice documentation with scope, decisions, results
+- These live in `implementations/{slug}/` and are git-tracked
+
+**Machine state** (SQLite at `.slice/slice.db` -- orchestrator reads/writes this):
+- Workflow runs: ID, task description, slug, status, current phase, base/working branch
+- Phase records: phase name, status, start/end timestamps, agent session ID, cost, duration, errors
+- Slice records: index, name, status (pending/running/completed/failed/awaiting_approval), agent session ID, timestamps, cost, errors
+- Review results: run ID, slice index, iteration, verdict, confidence, findings (JSON), reviewer session ID, cost
+- Notification log: what was sent, when, to which channel, user response
+- Resumability: on crash/restart, the orchestrator reads the DB to know exactly where it left off
+
+SQLite over JSON because:
+- Atomic writes (no partial state on crash)
+- Queryable (e.g., "total cost across all slices", "which slices failed")
+- Concurrent-access safe (needed when v2 adds parallel slice execution)
+- Migrations support (schema can evolve with the tool)
+
+The DB file is gitignored. It's machine-local state, not project documentation.
+
+### Configuration
+
+**Global** (`~/.slice/config.json`):
+
+```json
+{
+  "defaultProvider": "claude-code",
+  "providers": {
+    "claudeCode": {
+      "model": "sonnet"
+    },
+    "opencode": {
+      "model": "anthropic/claude-sonnet-4-20250514"
+    }
+  },
+  "messaging": {
+    "slack": {
+      "appToken": "xapp-1-...",
+      "botToken": "xoxb-...",
+      "defaultChannel": "#slice-notifications"
+    },
+    "telegram": {
+      "botToken": "123456:ABC-DEF...",
+      "chatId": "-1001234567890"
+    }
+  }
+}
+```
+
+**Project** (`.slicerc`):
+
+```json
+{
+  "implementationsDir": "implementations",
+  "approvalGates": { "rfc": true, "plan": true },
+  "sliceExecution": "autonomous",
+  "provider": "claude-code",
+  "review": {
+    "enabled": true,
+    "maxIterations": 2,
+    "severityThreshold": "major"
+  },
+  "messaging": {
+    "slack": { "channel": "#my-project-ci" }
+  }
+}
+```
+
+**Local model example** (`.slicerc` for cost-free testing with OpenCode + Ollama):
+
+```json
+{
+  "provider": "opencode",
+  "providers": {
+    "opencode": {
+      "model": "ollama/qwen2.5-coder:32b"
+    }
+  }
+}
+```
+
+## Implementation Order
+
+### Phase A: Foundation
+
+- Project scaffolding (package.json, tsconfig, biome, vitest, bin entrypoint)
+- CLI framework with Commander.js -- default TUI command, `resume`, `setup-github`
+- Configuration system with Zod validation (global + project config merge)
+- SQLite state store with migrations (`.slice/slice.db`)
+- Logger and error classes
+- TUI skeleton with Ink: `render()` entrypoint, root `<App>` component, prompt editor view, basic layout with `<Box>`/`<Text>`
+
+### Phase B: Runtime Layer
+
+- `AgentRuntime` interface and types
+- `ClaudeCodeRuntime` implementation:
+  - `run()` via SDK `query()` with async generator consumption
+  - `runInteractive()` via `child_process.spawn('claude', ..., { stdio: 'inherit' })`
+  - Progress callbacks from SDK message stream
+- `OpenCodeRuntime` implementation:
+  - `run()` via `@opencode-ai/sdk` session + prompt
+  - `runInteractive()` via `child_process.spawn('opencode', ..., { stdio: 'inherit' })`
+  - Optional: `opencode serve` mode for persistent server
+- Runtime factory (selects runtime based on config)
+- Unit tests with mocked SDKs
+
+### Phase C: Orchestrator Core
+
+- Phase state machine and transitions
+- Prompt builder and template system
+- RFC Draft phase (interactive spawn)
+- Draft Polish phase (autonomous refinement)
+- Plan phase (autonomous, validate output structure against track file schema)
+
+### Phase D: Messaging Integration
+
+- MessagingManager abstraction and MessagingChannel interface
+- Slack bot: Bolt app with Socket Mode, Block Kit approvals, notification formatting
+- Telegram bot: polling mode, inline keyboard approvals, notification formatting
+- Approval gate: messaging (Slack/Telegram) + TUI fallback
+- Wire into orchestrator approval gates
+
+### Phase E: Execution & Handoff
+
+- WorktreeManager: create worktree, install deps, cleanup (`.trees/` convention)
+- Slice execution loop: create worktree → spawn agent with `cwd` set to worktree → cleanup
+- Agent permissions: Claude SDK `acceptEdits` + `allowedTools`, OpenCode `opencode run` auto-approve
+- Post-slice review loop: reviewer agent → structured findings → fix agent → repeat (max N iterations)
+- Slice execution modes: autonomous (continue immediately) vs gated (pause for approval via messaging/TUI)
+- Error handling (retry slice, skip, abort) + messaging notification on failures
+- Handoff phase (agent creates PR via `gh pr create`) + messaging notification with PR URL
+
+### Phase F: Resume & GitHub Action
+
+- `slice resume --pr N` -- fetch review context via `gh api`, construct prompt, spawn agent
+- GitHub Action template and `slice setup-github` command
+- `slice status` -- read SQLite state, display progress table
+- `slice config` -- interactive config management
+
+## Dependencies
+
+### Production
+
+| Package | Purpose |
+|---------|---------|
+| `commander` | CLI framework -- parses commands, flags, arguments, generates help text |
+| `@anthropic-ai/claude-agent-sdk` | Claude Code SDK -- programmatically spawns Claude Code agents via `query()`. Used for all autonomous phases with Claude Code runtime |
+| `@opencode-ai/sdk` | OpenCode SDK -- programmatically controls OpenCode agents. Supports 75+ models with built-in tool execution (file edit, bash, grep, etc). No custom tool layer needed |
+| `better-sqlite3` | SQLite driver -- synchronous, zero-config, single-file DB. Used for machine state (run history, phase records, slice records, resumability) |
+| `zod` | Schema validation -- validates config files, agent structured outputs, plan phase output structure. Provides type inference from schemas |
+| `ink` | React renderer for CLI -- builds the TUI. Flexbox layout via Yoga, `<Static>` for streaming output. Requires Node >= 22, React >= 19 |
+| `react` | React 19 -- required by Ink. Hooks, state, context for TUI components |
+| `ink-text-input` | Text input component for prompt editor |
+| `ink-select-input` | Arrow-key selectable lists for approval gates, menus |
+| `ink-spinner` | Animated spinners for autonomous phase progress |
+| `chalk` | Terminal colors -- used by Ink's `<Text>` component for styling |
+| `@slack/bolt` | Slack Bolt framework -- handles Socket Mode WebSocket connection, interactive messages (buttons, modals), and event handling. No public URL needed |
+| `telegraf` | Telegram Bot framework -- handles long polling, inline keyboards for approvals, message formatting. No webhook needed |
+| `nanoid` | ID generation -- creates compact, URL-safe unique IDs for workflow runs, phase records, and slice records |
+
+### Development
+
+| Package | Purpose |
+|---------|---------|
+| `typescript` | TypeScript compiler |
+| `tsup` | Build/bundler -- compiles TypeScript to JavaScript, bundles for npm distribution, handles ESM/CJS |
+| `vitest` | Test framework -- fast, TypeScript-native, compatible with Jest API. Used for unit and integration tests |
+| `@biomejs/biome` | Linting + formatting -- single tool replacing ESLint + Prettier. Configured with strictest rules |
+| `@types/better-sqlite3` | TypeScript types for better-sqlite3 |
+| `@types/react` | TypeScript types for React (required by Ink) |
+| `ink-testing-library` | Testing utilities for Ink components -- render, inspect frames, simulate input |
+| `husky` | Git hooks -- runs pre-commit checks (biome) |
+| `lint-staged` | Staged file filtering -- runs biome only on staged files for fast pre-commit |
+
+## Verification
+
+1. **Unit tests**: Runtime (mocked SDKs), config loader, SQLite state store, worktree manager, prompt builder, messaging formatters, review loop (structured output parsing, early break, max iterations)
+2. **Integration test**: Full workflow on a test repo -- creates RFC, plan, executes slice 0, creates PR
+3. **Manual test**: Run against a real project with Claude Code, verify generated artifacts match decouple-data-layer/income-tracking structure
+4. **Messaging test**: Verify interactive approval flow on both Slack and Telegram -- send plan, click approve/reject, receive response in CLI
+5. **Resume test**: Create a PR, submit "Changes Requested" review, run `slice resume`, verify agent receives review context
+6. **TUI test**: Verify prompt editor, progress view, and local approval gates render and function correctly
+
+## Risks & Mitigations
+
+| Risk | Mitigation |
+|------|-----------|
+| Agent produces plan in unexpected format | Validate structure post-plan (check track file sections), retry with specific feedback |
+| Context window overflow on large slices | Plan prompt enforces 50% max fill, monitor via SDK usage data |
+| `claude` or `opencode` CLI not installed | Check at startup, provide installation URL, suggest the other runtime as fallback |
+| Slack/Telegram setup complexity | Provide `slice config` wizard that walks through bot creation, token setup for each platform. Document with screenshots |
+| `gh` CLI not installed | Agents need `gh` for PR creation and resume. Check before handoff/resume phases, provide installation guidance |
+| SQLite native dependency on npm install | `better-sqlite3` ships prebuilt binaries for all major platforms; fallback to build from source |
+| Process crash mid-workflow | SQLite state survives crash, `slice status` shows where it stopped, `slice continue` resumes from last checkpoint |
+| Message too long for plan content | Slack: split into blocks (max 3000 chars), upload as file > 10KB. Telegram: split into messages (max 4096 chars), send as document > 10KB |
+| Agent performs destructive operations | Worktree isolation contains blast radius -- main working copy is never touched |
+| Review loop goes infinite | Hard cap via `review.maxIterations` (default 2). Only `critical`/`major` findings trigger fix iterations. Escalate to human on exhaustion |
+| Worktree dependency setup slow | Use APFS copy-on-write clone (`cp -c`) for `node_modules` on macOS for near-instant duplication |
+| Node < 22 users can't use TUI | Ink 6.x requires Node >= 22. Document requirement clearly. CLI commands (resume, status) degrade gracefully without TUI |

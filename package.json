@@ -1,0 +1,37 @@
+{
+	"name": "slice",
+	"version": "0.1.0",
+	"description": "Slice workflow CLI",
+	"type": "module",
+	"bin": {
+		"slice": "./dist/bin/slice.mjs"
+	},
+	"scripts": {
+		"build": "tsup",
+		"dev": "tsup --watch",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"format": "biome format --write .",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"prepare": "husky"
+	},
+	"keywords": [],
+	"license": "GPL-2.0-only",
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.0",
+		"@types/node": "^25.5.0",
+		"husky": "^9.1.0",
+		"lint-staged": "^15.2.0",
+		"tsup": "^8.3.0",
+		"typescript": "^5.6.0",
+		"vitest": "^2.1.0"
+	},
+	"lint-staged": {
+		"*.{ts,tsx,js,jsx,json}": ["biome check --write --no-errors-on-unmatched"]
+	},
+	"engines": {
+		"node": ">=20"
+	}
+}
