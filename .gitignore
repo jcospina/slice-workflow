@@ -7,3 +7,4 @@ dist/
 coverage/
 .mcp.json
 implementations/
+.internal

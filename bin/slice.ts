@@ -1,1 +1,3 @@
-console.log("slice: workflow CLI — coming soon");
+import { createProgram } from "../src/cli/index";
+
+createProgram().parse();

@@ -11,7 +11,8 @@
 				"all": true
 			},
 			"correctness": {
-				"all": true
+				"all": true,
+				"useImportExtensions": "off"
 			},
 			"performance": {
 				"all": true
@@ -42,7 +43,7 @@
 	},
 	"overrides": [
 		{
-			"include": ["bin/**"],
+			"include": ["bin/**", "src/cli/**"],
 			"linter": {
 				"rules": {
 					"suspicious": {
