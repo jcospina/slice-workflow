@@ -12,10 +12,12 @@
 			},
 			"correctness": {
 				"all": true,
-				"useImportExtensions": "off"
+				"useImportExtensions": "off",
+				"noNodejsModules": "off"
 			},
 			"performance": {
-				"all": true
+				"all": true,
+				"noBarrelFile": "off"
 			},
 			"style": {
 				"all": true,
