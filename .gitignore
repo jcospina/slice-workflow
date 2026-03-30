@@ -8,3 +8,4 @@ coverage/
 .mcp.json
 implementations/
 .internal
+.slice/
