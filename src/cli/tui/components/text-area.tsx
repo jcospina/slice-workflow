@@ -3,6 +3,11 @@ import { useEffect, useRef, useState } from "react";
 
 const CLEAR_TIMEOUT_MS = 3000;
 
+// Raw escape sequences for Shift+Enter that Ink doesn't parse:
+// xterm modifyOtherKeys: \x1b[27;2;13~  (Ink consumes \x1b, leaves [27;2;13~)
+// Kitty CSI u:           \x1b[13;2u     (Ink consumes \x1b, leaves [13;2u)
+const SHIFT_ENTER_RAW = /\[27;2;13~|\[13;2u/;
+
 interface TextAreaProps {
 	placeholder?: string;
 	onSubmit: (value: string) => void;
@@ -188,16 +193,20 @@ export function TextArea({
 		return false;
 	};
 
+	const isShiftEnter = (input: string, key: Parameters<Parameters<typeof useInput>[0]>[1]) => {
+		return (key.return && key.shift) || SHIFT_ENTER_RAW.test(input);
+	};
+
 	const handleKeyEdit = (input: string, key: Parameters<Parameters<typeof useInput>[0]>[1]) => {
-		if (key.return && !key.shift) {
+		if (isShiftEnter(input, key)) {
+			applyEdit(handleNewline(lines, cursorRow, cursorCol));
+			return true;
+		}
+		if (key.return) {
 			const text = lines.join("\n").trim();
 			if (text.length > 0) {
 				onSubmit(text);
 			}
-			return true;
-		}
-		if (key.return && key.shift) {
-			applyEdit(handleNewline(lines, cursorRow, cursorCol));
 			return true;
 		}
 		if (key.backspace || key.delete) {
