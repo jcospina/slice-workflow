@@ -4,6 +4,7 @@
 		"module": "ESNext",
 		"moduleResolution": "bundler",
 		"lib": ["ES2022"],
+		"jsx": "react-jsx",
 		"strict": true,
 		"esModuleInterop": true,
 		"skipLibCheck": true,
@@ -20,6 +21,6 @@
 			"@/*": ["./src/*"]
 		}
 	},
-	"include": ["src/**/*.ts", "bin/**/*.ts"],
+	"include": ["src/**/*.ts", "src/**/*.tsx", "bin/**/*.ts"],
 	"exclude": ["node_modules", "dist"]
 }

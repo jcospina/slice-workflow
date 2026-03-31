@@ -46,7 +46,7 @@ describe("createProgram", () => {
 		run("setup-github");
 	});
 
-	it("runs default action with no args", () => {
+	it("runs default action with no args (non-TTY prints error)", () => {
 		run();
 	});
 

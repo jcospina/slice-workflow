@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { VERSION } from "../index";
 import { registerResumeCommand } from "./commands/resume";
 import { registerSetupGithubCommand } from "./commands/setup-github";
+import { startTui } from "./tui/index";
 
 export function createProgram(): Command {
 	const program = new Command();
@@ -21,7 +22,7 @@ export function createProgram(): Command {
 			if (unknownOption) {
 				program.error(`unknown option '${unknownOption}'`);
 			}
-			console.info("slice: opening TUI... (not yet implemented)");
+			startTui();
 		});
 
 	registerResumeCommand(program);
