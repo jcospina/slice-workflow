@@ -45,7 +45,7 @@
 	},
 	"overrides": [
 		{
-			"include": ["bin/**", "src/cli/**"],
+			"include": ["bin/**", "src/cli/**", "src/utils/logger.ts"],
 			"linter": {
 				"rules": {
 					"suspicious": {
