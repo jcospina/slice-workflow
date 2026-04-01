@@ -24,7 +24,7 @@ export interface AgentRunOptions {
 	contextFiles?: string[];
 	/** Maximum number of agentic turns before forcing a stop. */
 	maxTurns?: number;
-	/** Tool names the agent is allowed to use. When omitted, all tools are available. */
+	/** Tool names or permission rules that may run without approval when supported by the runtime. */
 	allowedTools?: string[];
 	/** Callback invoked as the agent streams progress events. */
 	onProgress?: (event: ProgressEvent) => void;

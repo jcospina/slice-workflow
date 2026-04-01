@@ -36,7 +36,7 @@ Each slice is small enough to fit within ~50% of an agent's context window, incl
 |----------|--------|-----------|
 | Language | TypeScript / Node.js | Ecosystem fit, strong CLI tooling |
 | Distribution | Global npm CLI | `npx slice` works anywhere |
-| Primary runtime | Claude Code SDK | Uses existing Claude Code subscription, built-in tool execution |
+| Primary runtime | Claude CLI (`claude -p` + `claude`) | CLI-first runtime for autonomous and interactive flows; usage/cost reporting may be unavailable |
 | Secondary runtime | OpenCode SDK | 75+ models (OpenAI, Ollama, Gemini, local models), zero-cost local dev |
 | TUI | Ink (React for CLI) | Component model, streaming output via `<Static>`, first-class TypeScript |
 | Machine state | SQLite (`better-sqlite3`) | Atomic writes, queryable, crash-resilient, supports resumability |
@@ -49,8 +49,10 @@ Each slice is small enough to fit within ~50% of an agent's context window, incl
 
 The core `AgentRuntime` interface supports multiple AI backends:
 
-- **Claude Code** — via `@anthropic-ai/claude-agent-sdk`, uses the user's existing subscription
+- **Claude Code** — via the local `claude` CLI: `claude -p` for autonomous runs, `claude` with terminal handoff for interactive runs
 - **OpenCode** — via `@opencode-ai/sdk`, supports 75+ model providers including local models through Ollama
+
+For the `claude-code` runtime, `slice` expects the Claude CLI to already be installed, available on `PATH` (or configured through `providers.claudeCode.command`), and authenticated in the local shell environment before a run starts. `slice` does not install or log in to Claude on the user's behalf. Autonomous runs forward `AgentRunOptions.maxTurns` to Claude CLI `--max-turns` and `AgentRunOptions.allowedTools` to Claude CLI `--allowedTools` for approval-free tool execution. When the CLI cannot be launched, the runtime raises an explicit error instead of silently falling back. When the Claude CLI does not expose usage metadata, `AgentRunResult.costUsd` intentionally falls back to `0`.
 
 ### Approval gates
 
@@ -113,6 +115,7 @@ npm run dev          # Watch mode
 
 - Node.js >= 20
 - `claude` CLI or `opencode` CLI installed (depending on chosen runtime)
+- If using `claude-code`, the Claude CLI must already be authenticated in the local environment
 - `gh` CLI for PR creation and resume
 
 ## License

@@ -433,7 +433,7 @@ describe("AgentRuntime contract", () => {
 	});
 
 	describe("edge cases and failure modes", () => {
-		it("SDK process crash returns result with error, not unhandled rejection", async () => {
+		it("agent process crash returns result with error, not unhandled rejection", async () => {
 			const received: ProgressEvent[] = [];
 			const runtime = createMockRuntime({
 				runImplementation: (options) => {
@@ -497,12 +497,12 @@ describe("AgentRuntime contract", () => {
 			expect(lastCost?.totalCostUsd).toBe(0.05);
 		});
 
-		it("SDK connection failure rejects before any progress events", async () => {
+		it("Claude CLI connection failure rejects before any progress events", async () => {
 			const received: ProgressEvent[] = [];
 			const runtime = createMockRuntime({
 				runImplementation: () =>
 					Promise.reject(
-						new RuntimeError("Failed to connect to Claude Code SDK", {
+						new RuntimeError("Failed to connect to Claude CLI", {
 							phase: "rfc-draft",
 						}),
 					),
@@ -514,13 +514,13 @@ describe("AgentRuntime contract", () => {
 					cwd: "/tmp",
 					onProgress: (e) => received.push(e),
 				}),
-			).rejects.toThrow("Failed to connect to Claude Code SDK");
+			).rejects.toThrow("Failed to connect to Claude CLI");
 
 			// No progress events should have been emitted
 			expect(received).toHaveLength(0);
 		});
 
-		it("SDK timeout produces result with partial output", async () => {
+		it("agent timeout produces result with partial output", async () => {
 			const runtime = createMockRuntime({
 				runImplementation: (options) => {
 					options.onProgress?.({ type: "agent_start" });
