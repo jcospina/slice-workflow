@@ -29,16 +29,21 @@ describe("resolveConfig", () => {
 	it("merges provider model configs with project taking precedence", () => {
 		const global: GlobalConfig = {
 			providers: {
-				claudeCode: { model: "sonnet" },
-				opencode: { model: "gpt-4o" },
+				claudeCode: { model: "sonnet", command: "maude" },
+				opencode: { model: "gpt-4o", command: "opencode-work" },
 			},
 		};
 		const project: ProjectConfig = {
-			providers: { opencode: { model: "ollama/qwen2.5-coder:32b" } },
+			providers: {
+				claudeCode: { command: "klaude" },
+				opencode: { model: "ollama/qwen2.5-coder:32b", command: "opencode-personal" },
+			},
 		};
 		const result = resolveConfig(global, project);
 		expect(result.providers.claudeCode.model).toBe("sonnet");
+		expect(result.providers.claudeCode.command).toBe("klaude");
 		expect(result.providers.opencode.model).toBe("ollama/qwen2.5-coder:32b");
+		expect(result.providers.opencode.command).toBe("opencode-personal");
 	});
 
 	it("resolves slack messaging when tokens are in global", () => {
@@ -163,12 +168,13 @@ describe("loadGlobalConfig", () => {
 			configPath,
 			JSON.stringify({
 				defaultProvider: "claude-code",
-				providers: { claudeCode: { model: "sonnet" } },
+				providers: { claudeCode: { model: "sonnet", command: "klaude" } },
 			}),
 		);
 		const result = loadGlobalConfig(configPath);
 		expect(result.defaultProvider).toBe("claude-code");
 		expect(result.providers?.claudeCode?.model).toBe("sonnet");
+		expect(result.providers?.claudeCode?.command).toBe("klaude");
 	});
 
 	it("throws on invalid JSON", () => {
@@ -243,7 +249,7 @@ describe("loadConfig end-to-end", () => {
 			globalPath,
 			JSON.stringify({
 				defaultProvider: "opencode",
-				providers: { opencode: { model: "gpt-4o" } },
+				providers: { opencode: { model: "gpt-4o", command: "opencode-work" } },
 				messaging: {
 					slack: {
 						appToken: "xapp-1",
@@ -258,6 +264,7 @@ describe("loadConfig end-to-end", () => {
 			JSON.stringify({
 				provider: "claude-code",
 				implementationsDir: "my-impl",
+				providers: { claudeCode: { command: "klaude" } },
 				messaging: { slack: { channel: "#project" } },
 			}),
 		);
@@ -268,6 +275,8 @@ describe("loadConfig end-to-end", () => {
 
 		expect(result.provider).toBe("claude-code");
 		expect(result.providers.opencode.model).toBe("gpt-4o");
+		expect(result.providers.opencode.command).toBe("opencode-work");
+		expect(result.providers.claudeCode.command).toBe("klaude");
 		expect(result.implementationsDir).toBe("my-impl");
 		expect(result.messaging.slack?.channel).toBe("#project");
 		expect(result.messaging.slack?.appToken).toBe("xapp-1");

@@ -14,6 +14,12 @@ const severityEnum = z
 
 const claudeCodeProviderSchema = z.object({
 	model: z.string().optional().describe("Claude model to use (e.g. 'sonnet', 'opus')"),
+	command: z
+		.string()
+		.optional()
+		.describe(
+			"Claude CLI executable name or path (e.g. 'claude', 'klaude', '/usr/local/bin/claude')",
+		),
 });
 
 const opencodeProviderSchema = z.object({
@@ -21,6 +27,10 @@ const opencodeProviderSchema = z.object({
 		.string()
 		.optional()
 		.describe("Model identifier in provider/model format (e.g. 'ollama/qwen2.5-coder:32b')"),
+	command: z
+		.string()
+		.optional()
+		.describe("OpenCode CLI executable name or path (e.g. 'opencode', '/usr/local/bin/opencode')"),
 });
 
 const providersSchema = z.object({

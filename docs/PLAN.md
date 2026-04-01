@@ -33,7 +33,7 @@ TUI Flow:
 |----------|--------|-----------|
 | Language | TypeScript/Node.js | Matches ecosystem, good CLI tooling |
 | Distribution | Global npm CLI | `npx slice start` works anywhere |
-| Primary runtime | Claude Code SDK (`@anthropic-ai/claude-agent-sdk`) | Free tool execution (file edit, bash, etc). Uses the user's existing Claude Code subscription -- no separate API key needed |
+| Primary runtime | Claude CLI (`claude -p` + `claude`) | CLI-first runtime: `claude -p` for autonomous phases and `claude` with `stdio: inherit` for interactive phases |
 | Secondary runtime | OpenCode SDK (`@opencode-ai/sdk`) | Supports 75+ models (OpenAI, Ollama, Gemini, local models). Has its own battle-tested tool execution layer -- no need to build custom tools |
 | Provider abstraction | `AgentRuntime` interface | Claude Code + OpenCode in v1, extensible to others |
 | Execution | Local subprocesses | Direct filesystem access, run tests locally |
@@ -51,16 +51,16 @@ TUI Flow:
 | RFC phase | Interactive terminal (spawn `claude` or `opencode` with `stdio: inherit`) | Full agent UX for conversations |
 | Config | `.slicerc` (project) + `~/.slice/config.json` (global) | Per-project customization |
 | Git operations | Delegated to agents (within worktrees) | Agents handle branching, committing, and PR creation via their built-in bash/git tools. Orchestrator manages worktree lifecycle and verifies state |
-| Agent permissions | Full autonomy via SDK config | Claude SDK: `acceptEdits` + explicit `allowedTools`. OpenCode: `opencode run` auto-approves all tools in non-interactive mode |
+| Agent permissions | Runtime-specific local execution config | Claude CLI runs in the isolated worktree and should avoid blocking prompts during autonomous phases. OpenCode: `opencode run` auto-approves all tools in non-interactive mode |
 
 ## Authentication & Provider Model
 
-**Claude Code runtime**: Uses the user's existing Claude Code installation and subscription. The SDK spawns the `claude` CLI as a subprocess, inheriting whatever auth is already configured (Claude Max subscription or API key in `claude`). No separate API key management needed.
+**Claude Code runtime**: Uses the locally installed `claude` CLI. Autonomous phases run via `claude -p`; interactive phases spawn `claude` with `stdio: inherit`. The CLI must already be installed, reachable on `PATH` (or via the configured command override), and authenticated before `slice` launches it. `slice` does not perform Claude installation or login flows. Usage/cost data may be unavailable for some CLI flows, so `AgentRunResult.costUsd` may legitimately be `0`.
 
 **OpenCode runtime**: Uses the user's existing OpenCode installation and configuration. OpenCode natively supports 75+ model providers -- the user configures their preferred model in OpenCode's own config (`opencode` CLI). Supports:
 
 - **OpenAI**: GPT-4o, etc.
-- **Anthropic**: Claude models (alternative to Claude Code SDK)
+- **Anthropic**: Claude models (alternative to the Claude CLI-first runtime)
 - **Local models**: Ollama, LM Studio, llama.cpp
 - **Cloud providers**: Groq, Together, AWS Bedrock, Azure OpenAI, Google Gemini, OpenRouter
 
@@ -111,7 +111,9 @@ slice/
 |   |
 |   +-- runtime/
 |   |   +-- types.ts                   # AgentRuntime interface (THE core abstraction)
-|   |   +-- claude-code.ts             # ClaudeCodeRuntime (via @anthropic-ai/claude-agent-sdk)
+|   |   +-- claude-code/
+|   |   |   +-- index.ts              # ClaudeCodeRuntime (via local claude CLI)
+|   |   |   +-- utils.ts              # Claude CLI argument/process helpers
 |   |   +-- opencode.ts               # OpenCodeRuntime (via @opencode-ai/sdk)
 |   |   +-- factory.ts                # Runtime factory
 |   |
@@ -193,7 +195,7 @@ interface AgentRunResult {
 }
 ```
 
-**ClaudeCodeRuntime**: Uses `@anthropic-ai/claude-agent-sdk` `query()` for autonomous phases. Spawns `claude` with `stdio: inherit` for interactive RFC phase. Uses the user's existing Claude Code subscription.
+**ClaudeCodeRuntime**: Uses `claude -p` for autonomous phases and forwards `maxTurns` via `--max-turns` plus approval-free `allowedTools` via `--allowedTools` when provided. Spawns `claude` with `stdio: inherit` for the interactive RFC phase. If the local CLI is missing or cannot be launched, the runtime surfaces an explicit launch error instead of falling back. `costUsd` may be `0` when the Claude CLI does not expose usage data.
 
 **OpenCodeRuntime**: Uses `@opencode-ai/sdk` for programmatic control, or `opencode run "prompt"` for headless execution. For persistent workflows, can use `opencode serve` (HTTP server on port 4096) + SDK client to avoid cold boot per agent call. Supports structured output via JSON schema. For interactive RFC phase, spawns `opencode` with `stdio: inherit`.
 
@@ -296,17 +298,16 @@ Git operations (branch, commit, push) are delegated to agents. But the orchestra
 
 Agents must run with full tool permissions to avoid blocking on approval prompts. Each runtime handles this differently:
 
-**Claude Code SDK:**
+**Claude CLI:**
 ```typescript
 {
-  allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
-  permissionMode: "acceptEdits",  // auto-approve file ops, Bash covered by allowedTools
   cwd: worktreePath,              // isolated to worktree
   maxTurns: 50,
-  maxBudgetUsd: 5.0,
+  argv: ["-p"],                   // autonomous mode
 }
 ```
-Uses `acceptEdits` + explicit `allowedTools` -- safer than `bypassPermissions` because only listed tools are auto-approved.
+Claude autonomy should come from the CLI-first invocation contract (`claude -p`) plus worktree scoping. Additional permission controls can be layered in without changing the provider id or runtime interface.
+The current CLI-first runtime already maps `maxTurns` to `--max-turns` and approval-free `allowedTools` to `--allowedTools`. A future restrictive tool allowlist would need separate handling via Claude CLI `--tools`.
 
 **OpenCode:**
 - Non-interactive mode (`opencode run --dir <worktree> "prompt"`) auto-approves all permissions
@@ -580,15 +581,15 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 
 - `AgentRuntime` interface and types
 - `ClaudeCodeRuntime` implementation:
-  - `run()` via SDK `query()` with async generator consumption
+  - `run()` via `claude -p`
   - `runInteractive()` via `child_process.spawn('claude', ..., { stdio: 'inherit' })`
-  - Progress callbacks from SDK message stream
+  - Progress callbacks from process output when available
 - `OpenCodeRuntime` implementation:
   - `run()` via `@opencode-ai/sdk` session + prompt
   - `runInteractive()` via `child_process.spawn('opencode', ..., { stdio: 'inherit' })`
   - Optional: `opencode serve` mode for persistent server
 - Runtime factory (selects runtime based on config)
-- Unit tests with mocked SDKs
+- Unit tests with mocked subprocess/CLI behavior
 
 ### Phase C: Orchestrator Core
 
@@ -610,7 +611,7 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 
 - WorktreeManager: create worktree, install deps, cleanup (`.trees/` convention)
 - Slice execution loop: create worktree → spawn agent with `cwd` set to worktree → cleanup
-- Agent permissions: Claude SDK `acceptEdits` + `allowedTools`, OpenCode `opencode run` auto-approve
+- Agent permissions: Claude CLI-first autonomous execution in an isolated worktree, OpenCode `opencode run` auto-approve
 - Post-slice review loop: reviewer agent → structured findings → fix agent → repeat (max N iterations)
 - Slice execution modes: autonomous (continue immediately) vs gated (pause for approval via messaging/TUI)
 - Error handling (retry slice, skip, abort) + messaging notification on failures
@@ -630,7 +631,6 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 | Package | Purpose |
 |---------|---------|
 | `commander` | CLI framework -- parses commands, flags, arguments, generates help text |
-| `@anthropic-ai/claude-agent-sdk` | Claude Code SDK -- programmatically spawns Claude Code agents via `query()`. Used for all autonomous phases with Claude Code runtime |
 | `@opencode-ai/sdk` | OpenCode SDK -- programmatically controls OpenCode agents. Supports 75+ models with built-in tool execution (file edit, bash, grep, etc). No custom tool layer needed |
 | `better-sqlite3` | SQLite driver -- synchronous, zero-config, single-file DB. Used for machine state (run history, phase records, slice records, resumability) |
 | `zod` | Schema validation -- validates config files, agent structured outputs, plan phase output structure. Provides type inference from schemas |
@@ -660,7 +660,7 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 
 ## Verification
 
-1. **Unit tests**: Runtime (mocked SDKs), config loader, SQLite state store, worktree manager, prompt builder, messaging formatters, review loop (structured output parsing, early break, max iterations)
+1. **Unit tests**: Runtime (mocked CLI/subprocess behavior), config loader, SQLite state store, worktree manager, prompt builder, messaging formatters, review loop (structured output parsing, early break, max iterations)
 2. **Integration test**: Full workflow on a test repo -- creates RFC, plan, executes slice 0, creates PR
 3. **Manual test**: Run against a real project with Claude Code, verify generated artifacts match decouple-data-layer/income-tracking structure
 4. **Messaging test**: Verify interactive approval flow on both Slack and Telegram -- send plan, click approve/reject, receive response in CLI
@@ -672,7 +672,7 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 | Risk | Mitigation |
 |------|-----------|
 | Agent produces plan in unexpected format | Validate structure post-plan (check track file sections), retry with specific feedback |
-| Context window overflow on large slices | Plan prompt enforces 50% max fill, monitor via SDK usage data |
+| Context window overflow on large slices | Plan prompt enforces 50% max fill, monitor via available CLI usage data when exposed; otherwise rely on duration/log output |
 | `claude` or `opencode` CLI not installed | Check at startup, provide installation URL, suggest the other runtime as fallback |
 | Slack/Telegram setup complexity | Provide `slice config` wizard that walks through bot creation, token setup for each platform. Document with screenshots |
 | `gh` CLI not installed | Agents need `gh` for PR creation and resume. Check before handoff/resume phases, provide installation guidance |
