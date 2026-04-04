@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { RuntimeError } from "../utils/errors";
 import { ClaudeCodeRuntime } from "./claude-code";
 import { createAgentRuntime } from "./factory";
+import { OpenCodeRuntime } from "./opencode";
 
 describe("createAgentRuntime", () => {
 	it("constructs the claude-code runtime scaffold", () => {
@@ -32,10 +33,30 @@ describe("createAgentRuntime", () => {
 		expect((runtime as ClaudeCodeRuntime).config).toEqual({});
 	});
 
-	it("rejects providers without runtime wiring", () => {
-		expect(() => createAgentRuntime({ provider: "opencode" })).toThrow(RuntimeError);
-		expect(() => createAgentRuntime({ provider: "opencode" })).toThrow(
-			"does not have a runtime implementation yet",
-		);
+	it("constructs the opencode runtime scaffold", () => {
+		const runtime = createAgentRuntime({
+			provider: "opencode",
+			providers: { opencode: { model: "ollama/qwen2.5-coder:32b" } },
+		});
+
+		expect(runtime).toBeInstanceOf(OpenCodeRuntime);
+		expect(runtime.provider).toBe("opencode");
+		expect((runtime as OpenCodeRuntime).config).toEqual({ model: "ollama/qwen2.5-coder:32b" });
+	});
+
+	it("uses empty opencode provider config when none is supplied", () => {
+		const runtime = createAgentRuntime({ provider: "opencode" });
+
+		expect(runtime).toBeInstanceOf(OpenCodeRuntime);
+		expect((runtime as OpenCodeRuntime).config).toEqual({});
+	});
+
+	it("rejects unknown providers", () => {
+		expect(() =>
+			createAgentRuntime({ provider: "unsupported" as unknown as "claude-code" }),
+		).toThrow(RuntimeError);
+		expect(() =>
+			createAgentRuntime({ provider: "unsupported" as unknown as "claude-code" }),
+		).toThrow("is not supported");
 	});
 });

@@ -30,7 +30,9 @@ const opencodeProviderSchema = z.object({
 	command: z
 		.string()
 		.optional()
-		.describe("OpenCode CLI executable name or path (e.g. 'opencode', '/usr/local/bin/opencode')"),
+		.describe(
+			"OpenCode CLI executable name or path (must be installed/runnable, e.g. 'opencode', '/usr/local/bin/opencode')",
+		),
 });
 
 const providersSchema = z.object({

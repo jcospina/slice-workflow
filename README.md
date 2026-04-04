@@ -54,6 +54,8 @@ The core `AgentRuntime` interface supports multiple AI backends:
 
 For the `claude-code` runtime, `slice` expects the Claude CLI to already be installed, available on `PATH` (or configured through `providers.claudeCode.command`), and authenticated in the local shell environment before a run starts. `slice` does not install or log in to Claude on the user's behalf. Autonomous runs forward `AgentRunOptions.maxTurns` to Claude CLI `--max-turns` and `AgentRunOptions.allowedTools` to Claude CLI `--allowedTools` for approval-free tool execution. When the CLI cannot be launched, the runtime raises an explicit error instead of silently falling back. When the Claude CLI does not expose usage metadata, `AgentRunResult.costUsd` intentionally falls back to `0`.
 
+For the `opencode` runtime, `slice` uses an SDK-first autonomous path (`@opencode-ai/sdk`) backed by a runtime-managed local `opencode serve` process on loopback (`127.0.0.1:4096`). The OpenCode CLI must already be installed and reachable on `PATH` (or configured through `providers.opencode.command`) before a run starts; `slice` does not install OpenCode. Interactive runs keep CLI terminal handoff (`opencode` with inherited stdio). Launch/startup failures (missing CLI, non-executable command, failed local server startup) are surfaced explicitly to operators; no silent fallback path is used. Hosted OpenCode offerings remain optional, and local provider setups are fully supported. When OpenCode usage metadata is unavailable, `AgentRunResult.costUsd` intentionally falls back to `0`.
+
 ### Approval gates
 
 Users can approve, reject, or request changes on RFCs and plans from:
@@ -116,6 +118,7 @@ npm run dev          # Watch mode
 - Node.js >= 20
 - `claude` CLI or `opencode` CLI installed (depending on chosen runtime)
 - If using `claude-code`, the Claude CLI must already be authenticated in the local environment
+- If using `opencode`, the OpenCode CLI must already be installed and runnable in the local environment
 - `gh` CLI for PR creation and resume
 
 ## License
