@@ -116,6 +116,7 @@ slice/
 |   |   |   +-- utils.ts              # Claude CLI argument/process helpers
 |   |   +-- opencode.ts               # OpenCodeRuntime (via @opencode-ai/sdk)
 |   |   +-- factory.ts                # Runtime factory
+|   |   +-- slice-context.ts          # SliceExecutionContext typed contract (read-only fields per slice)
 |   |
 |   +-- prompts/
 |   |   +-- index.ts                  # Prompt builder
@@ -151,9 +152,15 @@ slice/
 |   |   +-- action.ts                # GitHub Action YAML generator
 |   |   +-- resume-context.ts        # Fetch PR review context via gh
 |   |
+|   +-- hooks/
+|   |   +-- types.ts                 # HookEvent, HookInput, HookOutput, HookDefinition
+|   |   +-- runner.ts                # Hook execution engine (spawn, stdin JSON, abort support)
+|   +-- diagnostics/
+|   |   +-- tracker.ts               # Pre/post slice diagnostic capture and delta (tsc, lint, tests)
 |   +-- utils/
 |       +-- logger.ts
 |       +-- errors.ts
+|       +-- retry.ts                 # withRetry() with exponential backoff + RetryConfig
 |       +-- fs.ts
 |
 +-- templates/
@@ -346,7 +353,7 @@ Reviewer Agent (iteration 1)
 **Reviewer output (structured JSON):**
 ```typescript
 interface ReviewResult {
-  verdict: 'PASS' | 'FAIL';
+  verdict: 'PASS' | 'FAIL' | 'PARTIAL';
   confidence: number;           // 0.0-1.0
   findings: ReviewFinding[];
   summary: string;
@@ -375,6 +382,7 @@ review: {
   maxIterations: number;          // default: 2
   reviewProvider?: string;        // optional: use different provider for review
   severityThreshold: 'critical' | 'major' | 'minor';  // default: 'major'
+  adversarial: boolean;           // default: true — tries to break rather than confirm
 }
 ```
 
@@ -545,8 +553,19 @@ The DB file is gitignored. It's machine-local state, not project documentation.
   "review": {
     "enabled": true,
     "maxIterations": 2,
-    "severityThreshold": "major"
+    "severityThreshold": "major",
+    "adversarial": true
   },
+  "execution": {
+    "maxTurnsPerSlice": 50,
+    "maxTurnsPerReview": 20
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "baseDelayMs": 2000,
+    "maxDelayMs": 60000
+  },
+  "hooks": [],
   "messaging": {
     "slack": { "channel": "#my-project-ci" }
   }
@@ -613,16 +632,21 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 - Slice execution loop: create worktree → spawn agent with `cwd` set to worktree → cleanup
 - Agent permissions: Claude CLI-first autonomous execution in an isolated worktree, OpenCode autonomous SDK permission event auto-response (`once`)
 - Post-slice review loop: reviewer agent → structured findings → fix agent → repeat (max N iterations)
+- Adversarial reviewer prompt (PARTIAL verdict, anti-rationalization preamble, strategy matrix by change type, read-only /tmp constraint)
+- `SliceExecutionContext` typed contract: build read-only context before each slice, inject write-boundary instructions into system prompt
+- Diagnostic baseline/delta: capture tsc error count + lint issues + test pass rate before/after each slice; include delta in reviewer prompt
 - Slice execution modes: autonomous (continue immediately) vs gated (pause for approval via messaging/TUI)
-- Error handling (retry slice, skip, abort) + messaging notification on failures
+- Error handling: `RetryableError` + `BudgetExhaustedError` subclasses, `categorizeError()`, `withRetry()` wrapping slice execution
 - Handoff phase (agent creates PR via `gh pr create`) + messaging notification with PR URL
 
 ### Phase F: Resume & GitHub Action
 
 - `slice resume --pr N` -- fetch review context via `gh api`, construct prompt, spawn agent
 - GitHub Action template and `slice setup-github` command
-- `slice status` -- read SQLite state, display progress table
+- `slice status` -- read SQLite state, display progress table (include turns used/max for running slices)
 - `slice config` -- interactive config management
+- Hook system: `src/hooks/types.ts` + `src/hooks/runner.ts`, config schema extension, emit hooks from orchestrator at every state transition
+- Session/CLI config overrides: `--provider`, `--model`, `--max-budget`, `--slice-execution`, `--no-review`, `--config` flags; resolve as in-memory session layer above project config
 
 ## Dependencies
 

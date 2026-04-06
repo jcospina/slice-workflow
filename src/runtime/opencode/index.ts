@@ -124,12 +124,17 @@ export class OpenCodeRuntime implements AgentRuntime {
 		const startedAt = this.now();
 		const sessionId = this.createSessionId();
 		const prompt = await buildInteractivePrompt(options, this.provider);
+		const rfcInstruction = options.rfcArtifactPath
+			? `When you are done, write the complete RFC draft as a Markdown document to:\n${options.rfcArtifactPath}`
+			: undefined;
+		const effectiveSystemPrompt =
+			[options.systemPrompt?.trim(), rfcInstruction].filter(Boolean).join("\n\n") || undefined;
 		const execution = await this.runOpenCodeCli({
 			command: this.config.command ?? "opencode",
 			args: buildInteractiveOpenCodeArgs({
 				model: this.config.model,
 				prompt,
-				systemPrompt: options.systemPrompt,
+				systemPrompt: effectiveSystemPrompt,
 			}),
 			cwd: options.cwd,
 			method: "runInteractive",

@@ -14,6 +14,7 @@ import {
 	buildInteractiveClaudeArgs,
 	buildInteractivePrompt,
 	normalizeRunResult,
+	readRfcArtifact,
 	runClaudeCli,
 } from "./utils";
 
@@ -87,20 +88,31 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 		const startedAt = this.now();
 		const sessionId = this.createSessionId();
 		const prompt = await buildInteractivePrompt(options, this.provider);
+		const rfcInstruction = options.rfcArtifactPath
+			? `When you are done, write the complete RFC draft as a Markdown document to:\n${options.rfcArtifactPath}`
+			: undefined;
+		const effectiveSystemPrompt =
+			[options.systemPrompt?.trim(), rfcInstruction].filter(Boolean).join("\n\n") || undefined;
 		const execution = await this.runClaudeCli({
 			command: this.config.command ?? "claude",
 			args: buildInteractiveClaudeArgs({
 				config: this.config,
 				prompt,
 				sessionId,
-				systemPrompt: options.systemPrompt,
+				systemPrompt: effectiveSystemPrompt,
 			}),
 			cwd: options.cwd,
 			method: "runInteractive",
 			stdio: "inherit",
 		});
 		const durationMs = Math.max(0, this.now() - startedAt);
+		const result = normalizeRunResult(execution, durationMs, sessionId);
 
-		return normalizeRunResult(execution, durationMs, sessionId);
+		if (result.success && options.rfcArtifactPath) {
+			const rfcContent = await readRfcArtifact(options.rfcArtifactPath);
+			return { ...result, output: rfcContent };
+		}
+
+		return result;
 	}
 }

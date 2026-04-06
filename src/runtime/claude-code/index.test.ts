@@ -316,4 +316,183 @@ describe("ClaudeCodeRuntime", () => {
 			error: "Claude CLI terminated with signal SIGTERM.",
 		});
 	});
+
+	it("injects RFC artifact writing instruction into the system prompt when rfcArtifactPath is provided", async () => {
+		const sessionId = "sess-rfc-cc-1";
+		const runClaudeCli = vi.fn().mockResolvedValue({
+			stdout: "",
+			stderr: "",
+			exitCode: 0,
+			signal: null,
+		});
+		const runtime = new ClaudeCodeRuntime(
+			{},
+			{
+				runClaudeCli,
+				now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(50),
+				createSessionId: () => sessionId,
+			},
+		);
+
+		await runtime.runInteractive({
+			cwd: "/tmp/slice",
+			prompt: "Draft the RFC.",
+			rfcArtifactPath: "/tmp/implementations/my-feature-rfc-draft.md",
+		});
+
+		expect(runClaudeCli).toHaveBeenCalledWith({
+			command: "claude",
+			args: [
+				"--session-id",
+				sessionId,
+				"--append-system-prompt",
+				"When you are done, write the complete RFC draft as a Markdown document to:\n/tmp/implementations/my-feature-rfc-draft.md",
+				"Task:\nDraft the RFC.",
+			],
+			cwd: "/tmp/slice",
+			method: "runInteractive",
+			stdio: "inherit",
+		});
+	});
+
+	it("reads the RFC artifact file and returns its content as output after a successful session", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "claude-code-rfc-read-"));
+		const rfcPath = join(cwd, "my-feature-rfc-draft.md");
+		const rfcContent = "# RFC Draft\n\nThis is the RFC content.";
+		const sessionId = "sess-rfc-cc-read-1";
+		const runClaudeCli = vi.fn().mockResolvedValue({
+			stdout: "",
+			stderr: "",
+			exitCode: 0,
+			signal: null,
+		});
+		const runtime = new ClaudeCodeRuntime(
+			{},
+			{
+				runClaudeCli,
+				now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(100),
+				createSessionId: () => sessionId,
+			},
+		);
+
+		try {
+			await writeFile(rfcPath, rfcContent);
+
+			const result = await runtime.runInteractive({
+				cwd,
+				prompt: "Draft the RFC.",
+				rfcArtifactPath: rfcPath,
+			});
+
+			expect(result).toEqual({
+				success: true,
+				output: rfcContent,
+				sessionId,
+				costUsd: 0,
+				durationMs: 100,
+			});
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("returns empty output when the RFC artifact file was not written by the agent", async () => {
+		const sessionId = "sess-rfc-cc-missing";
+		const runtime = new ClaudeCodeRuntime(
+			{},
+			{
+				runClaudeCli: vi.fn().mockResolvedValue({
+					stdout: "",
+					stderr: "",
+					exitCode: 0,
+					signal: null,
+				}),
+				now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(50),
+				createSessionId: () => sessionId,
+			},
+		);
+
+		const result = await runtime.runInteractive({
+			cwd: "/tmp/slice",
+			rfcArtifactPath: "/tmp/slice/implementations/nonexistent-rfc-draft.md",
+		});
+
+		expect(result).toEqual({
+			success: true,
+			output: "",
+			sessionId,
+			costUsd: 0,
+			durationMs: 50,
+		});
+	});
+
+	it("skips RFC artifact reading when the interactive session fails", async () => {
+		const sessionId = "sess-rfc-cc-fail";
+		const runtime = new ClaudeCodeRuntime(
+			{},
+			{
+				runClaudeCli: vi.fn().mockResolvedValue({
+					stdout: "",
+					stderr: "",
+					exitCode: null,
+					signal: "SIGTERM",
+				}),
+				now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(50),
+				createSessionId: () => sessionId,
+			},
+		);
+
+		const result = await runtime.runInteractive({
+			cwd: "/tmp/slice",
+			rfcArtifactPath: "/tmp/slice/implementations/my-feature-rfc-draft.md",
+		});
+
+		expect(result).toEqual({
+			success: false,
+			output: "Claude CLI terminated with signal SIGTERM.",
+			sessionId,
+			costUsd: 0,
+			durationMs: 50,
+			error: "Claude CLI terminated with signal SIGTERM.",
+		});
+	});
+
+	it("merges rfcArtifactPath instruction with an existing system prompt", async () => {
+		const sessionId = "sess-rfc-cc-2";
+		const runClaudeCli = vi.fn().mockResolvedValue({
+			stdout: "",
+			stderr: "",
+			exitCode: 0,
+			signal: null,
+		});
+		const runtime = new ClaudeCodeRuntime(
+			{},
+			{
+				runClaudeCli,
+				now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(50),
+				createSessionId: () => sessionId,
+			},
+		);
+
+		await runtime.runInteractive({
+			cwd: "/tmp/slice",
+			prompt: "Draft the RFC.",
+			systemPrompt: "Stay focused on the task.",
+			rfcArtifactPath: "/tmp/implementations/my-feature-rfc-draft.md",
+		});
+
+		expect(runClaudeCli).toHaveBeenCalledWith({
+			command: "claude",
+			args: [
+				"--session-id",
+				sessionId,
+				"--append-system-prompt",
+				"Stay focused on the task.\n\nWhen you are done, write the complete RFC draft as a Markdown document to:\n/tmp/implementations/my-feature-rfc-draft.md",
+				"Task:\nDraft the RFC.",
+			],
+			cwd: "/tmp/slice",
+			method: "runInteractive",
+			stdio: "inherit",
+		});
+	});
 });

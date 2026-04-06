@@ -41,6 +41,8 @@ export interface AgentInteractiveOptions {
 	cwd: string;
 	/** File paths to include as context for the session. */
 	contextFiles?: string[];
+	/** Absolute path where the agent should write the RFC draft artifact. When set, runInteractive() appends a writing instruction to the session system prompt. */
+	rfcArtifactPath?: string;
 }
 
 // --- Run result ---

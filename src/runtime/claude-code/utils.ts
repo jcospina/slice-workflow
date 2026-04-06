@@ -214,6 +214,14 @@ export async function runClaudeCli(
 	});
 }
 
+export async function readRfcArtifact(rfcArtifactPath: string): Promise<string> {
+	try {
+		return await readFile(rfcArtifactPath, "utf-8");
+	} catch {
+		return "";
+	}
+}
+
 async function readContextSections(
 	contextFiles: string[] | undefined,
 	cwd: string,
