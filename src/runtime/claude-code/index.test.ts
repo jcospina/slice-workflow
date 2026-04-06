@@ -426,6 +426,66 @@ describe("ClaudeCodeRuntime", () => {
 		});
 	});
 
+	it("emits text_output progress events as stdout chunks arrive", async () => {
+		const onProgress = vi.fn();
+		const runtime = new ClaudeCodeRuntime(
+			{},
+			{
+				runClaudeCli: vi
+					.fn()
+					.mockImplementation(({ onStdout }: { onStdout?: (chunk: string) => void }) => {
+						onStdout?.("Partial output chunk 1");
+						onStdout?.("Partial output chunk 2");
+						return Promise.resolve({
+							stdout: "Final output",
+							stderr: "",
+							exitCode: 0,
+							signal: null,
+						});
+					}),
+				now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(10),
+				createSessionId: () => "sess-text-output",
+			},
+		);
+
+		await runtime.run({ prompt: "Implement Slice 02", cwd: "/tmp/slice", onProgress });
+
+		expect(onProgress).toHaveBeenCalledWith({ type: "agent_start" });
+		expect(onProgress).toHaveBeenCalledWith({
+			type: "text_output",
+			text: "Partial output chunk 1",
+		});
+		expect(onProgress).toHaveBeenCalledWith({
+			type: "text_output",
+			text: "Partial output chunk 2",
+		});
+	});
+
+	it("emits an error progress event when the CLI exits with a non-zero code", async () => {
+		const onProgress = vi.fn();
+		const runtime = new ClaudeCodeRuntime(
+			{},
+			{
+				runClaudeCli: vi.fn().mockResolvedValue({
+					stdout: "Partial output",
+					stderr: "Claude reported a failure",
+					exitCode: 2,
+					signal: null,
+				}),
+				now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(60),
+				createSessionId: () => "sess-progress-nonzero",
+			},
+		);
+
+		await runtime.run({ prompt: "Implement Slice 02", cwd: "/tmp/slice", onProgress });
+
+		expect(onProgress).toHaveBeenNthCalledWith(1, { type: "agent_start" });
+		expect(onProgress).toHaveBeenNthCalledWith(2, {
+			type: "error",
+			message: "Claude reported a failure",
+		});
+	});
+
 	it("skips RFC artifact reading when the interactive session fails", async () => {
 		const sessionId = "sess-rfc-cc-fail";
 		const runtime = new ClaudeCodeRuntime(
