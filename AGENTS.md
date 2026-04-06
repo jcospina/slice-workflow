@@ -7,3 +7,4 @@
 - Run targeted checks/tests first, then broaden to full `npm run lint`, `npm run typecheck`, and `npm test` only when scope/risk warrants it.
 - If the user is making a wrong statement say so
 - Ask as many clarifying questions as needed when something is not clear or before commiting on large scale tasks.
+- Branch naming convention: only the workitem code (i.e SLICEWORKF-1)

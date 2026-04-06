@@ -51,13 +51,13 @@ TUI Flow:
 | RFC phase | Interactive terminal (spawn `claude` or `opencode` with `stdio: inherit`) | Full agent UX for conversations |
 | Config | `.slicerc` (project) + `~/.slice/config.json` (global) | Per-project customization |
 | Git operations | Delegated to agents (within worktrees) | Agents handle branching, committing, and PR creation via their built-in bash/git tools. Orchestrator manages worktree lifecycle and verifies state |
-| Agent permissions | Runtime-specific local execution config | Claude CLI runs in the isolated worktree and should avoid blocking prompts during autonomous phases. OpenCode: `opencode run` auto-approves all tools in non-interactive mode |
+| Agent permissions | Runtime-specific local execution config | Claude CLI runs in the isolated worktree and should avoid blocking prompts during autonomous phases. OpenCode autonomous runs use SDK permission event auto-response (`once`) to avoid approval blocking |
 
 ## Authentication & Provider Model
 
 **Claude Code runtime**: Uses the locally installed `claude` CLI. Autonomous phases run via `claude -p`; interactive phases spawn `claude` with `stdio: inherit`. The CLI must already be installed, reachable on `PATH` (or via the configured command override), and authenticated before `slice` launches it. `slice` does not perform Claude installation or login flows. Usage/cost data may be unavailable for some CLI flows, so `AgentRunResult.costUsd` may legitimately be `0`.
 
-**OpenCode runtime**: Uses the user's existing OpenCode installation and configuration. OpenCode natively supports 75+ model providers -- the user configures their preferred model in OpenCode's own config (`opencode` CLI). Supports:
+**OpenCode runtime**: Uses an SDK-first autonomous path (`@opencode-ai/sdk`) against a runtime-managed local `opencode serve` process on loopback (`127.0.0.1:4096`), plus CLI terminal handoff (`opencode` with `stdio: inherit`) for interactive phases. The OpenCode CLI must already be installed and reachable on `PATH` (or configured command override) before launch; `slice` does not install OpenCode or run account setup flows. Launch/startup failures are surfaced explicitly (missing command, non-executable command, server startup timeout/exit) with no silent fallback path. Hosted OpenCode offerings are optional; local provider setups are valid and in-scope. When usage metadata is unavailable, `AgentRunResult.costUsd` intentionally falls back to `0`. OpenCode natively supports 75+ model providers, including:
 
 - **OpenAI**: GPT-4o, etc.
 - **Anthropic**: Claude models (alternative to the Claude CLI-first runtime)
@@ -197,7 +197,7 @@ interface AgentRunResult {
 
 **ClaudeCodeRuntime**: Uses `claude -p` for autonomous phases and forwards `maxTurns` via `--max-turns` plus approval-free `allowedTools` via `--allowedTools` when provided. Spawns `claude` with `stdio: inherit` for the interactive RFC phase. If the local CLI is missing or cannot be launched, the runtime surfaces an explicit launch error instead of falling back. `costUsd` may be `0` when the Claude CLI does not expose usage data.
 
-**OpenCodeRuntime**: Uses `@opencode-ai/sdk` for programmatic control, or `opencode run "prompt"` for headless execution. For persistent workflows, can use `opencode serve` (HTTP server on port 4096) + SDK client to avoid cold boot per agent call. Supports structured output via JSON schema. For interactive RFC phase, spawns `opencode` with `stdio: inherit`.
+**OpenCodeRuntime**: Uses `@opencode-ai/sdk` for autonomous runs against a runtime-managed local `opencode serve` instance (HTTP on loopback port 4096), including permission auto-response to avoid approval blocking. For interactive RFC phase, spawns `opencode` with `stdio: inherit`. Missing CLI, launch, and local server startup failures are surfaced explicitly to operators instead of falling back silently. `costUsd` defaults to `0` when usage metadata is unavailable.
 
 ## Key Implementation Details
 
@@ -310,8 +310,8 @@ Claude autonomy should come from the CLI-first invocation contract (`claude -p`)
 The current CLI-first runtime already maps `maxTurns` to `--max-turns` and approval-free `allowedTools` to `--allowedTools`. A future restrictive tool allowlist would need separate handling via Claude CLI `--tools`.
 
 **OpenCode:**
-- Non-interactive mode (`opencode run --dir <worktree> "prompt"`) auto-approves all permissions
-- Alternatively, set `"permission": "allow"` in project's `opencode.json`
+- Autonomous mode uses OpenCode SDK session APIs and listens to permission events (`permission.updated` / `permission.asked`) to auto-respond with `"once"` for the active session.
+- The runtime manages a local `opencode serve` process and fails fast with explicit startup errors when the CLI is missing, non-executable, exits early, or times out before readiness.
 
 ### Post-Slice Review Loop
 
@@ -587,7 +587,7 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 - `OpenCodeRuntime` implementation:
   - `run()` via `@opencode-ai/sdk` session + prompt
   - `runInteractive()` via `child_process.spawn('opencode', ..., { stdio: 'inherit' })`
-  - Optional: `opencode serve` mode for persistent server
+  - Runtime-managed local `opencode serve` lifecycle for autonomous SDK calls
 - Runtime factory (selects runtime based on config)
 - Unit tests with mocked subprocess/CLI behavior
 
@@ -611,7 +611,7 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 
 - WorktreeManager: create worktree, install deps, cleanup (`.trees/` convention)
 - Slice execution loop: create worktree → spawn agent with `cwd` set to worktree → cleanup
-- Agent permissions: Claude CLI-first autonomous execution in an isolated worktree, OpenCode `opencode run` auto-approve
+- Agent permissions: Claude CLI-first autonomous execution in an isolated worktree, OpenCode autonomous SDK permission event auto-response (`once`)
 - Post-slice review loop: reviewer agent → structured findings → fix agent → repeat (max N iterations)
 - Slice execution modes: autonomous (continue immediately) vs gated (pause for approval via messaging/TUI)
 - Error handling (retry slice, skip, abort) + messaging notification on failures
