@@ -41,6 +41,8 @@ flowchart LR
 
     MSG --> SLACK[Slack]
     MSG --> TG[Telegram]
+    ORCH --> HK[Hook Runner]
+    HK --> HOOKS[User-defined shell hooks]
 ```
 
 ## Architectural model: two data planes and one control plane
@@ -293,9 +295,12 @@ Key behavior constraints:
 | State machine (`src/orchestrator/state-machine.ts`) | Valid transitions and progression logic | Current state | Next state decision |
 | StateManager (`src/state`) | Persistence API for machine state | SQLite rows | SQLite rows |
 | Runtime layer (`src/runtime`) | Provider-neutral agent invocation | Prompts + context + cwd | Agent output, session IDs, cost |
+| SliceExecutionContext (`src/runtime/slice-context.ts`) | Read/write contract for each slice agent | Plan doc, PROGRESS.md, track doc, cost | Read-only contract; worktreePath is the only writable root |
 | WorktreeManager (`src/orchestrator/worktree.ts`) | Worktree create/setup/cleanup and isolation | Repo git state | Worktree filesystem |
 | Prompt builder (`src/prompts`) | Deterministic prompt composition | Plan doc, PROGRESS.md, current track | Prompt strings |
 | MessagingManager (`src/messaging`) | Channel fan-out, approvals, notifications | Event payloads | Sent message records and user responses |
+| Hook runner (`src/hooks/runner.ts`) | Fire user-defined shell commands at lifecycle events | HookDefinitions from config | stdout responses; can signal abort |
+| DiagnosticTracker (`src/diagnostics/tracker.ts`) | Capture tsc/lint/test baselines and compute post-slice delta | Worktree output | DiagnosticDelta for reviewer prompt |
 | GitHub resume integration (`src/github`) | Resume context from PR review feedback | PR comments and diff context | Resume invocation context |
 
 ## Approval and notification wiring
@@ -338,6 +343,8 @@ Worktrees are a safety boundary, not just a git convenience.
 - Destructive mistakes stay contained to the slice workspace.
 - Orchestrator handles setup and cleanup; agents stay focused on implementation.
 
+A `SliceExecutionContext` (`src/runtime/slice-context.ts`) formalizes the read/write contract before each slice runs. It exposes read-only fields (plan doc, PROGRESS.md, track doc, cumulative cost, remaining budget) and the writable `worktreePath`. The agent system prompt is built from this context and explicitly states the write boundaries. Post-slice, the orchestrator (not the agent) owns the merge back to the working branch and SQLite state update.
+
 ## Failure model and recovery paths
 
 ### Failure classes
@@ -347,10 +354,15 @@ Worktrees are a safety boundary, not just a git convenience.
 - Reviewer loop exhaustion
 - Approval rejection
 - Process crash
+- Transient API failure (rate limit, timeout, server error)
+- Budget exhaustion
 
 ### Recovery model
 
 - Operational failures update SQLite with precise status and error metadata.
+- Transient failures (`RetryableError`) are retried automatically with exponential backoff + jitter via `withRetry()` in `src/utils/retry.ts`. Rate-limit `retry-after` headers inform the backoff delay.
+- Budget exhaustion (`BudgetExhaustedError`) halts the workflow immediately and notifies the user.
+- Fatal errors propagate immediately without retry.
 - Notifications can request user action (retry, resolve, reject).
 - Process crashes recover through DB checkpoint inspection.
 - `slice status` and resume commands are driven by persisted machine state.

@@ -354,6 +354,81 @@ describe("OpenCodeRuntime", () => {
 			error: "OpenCode CLI terminated with signal SIGTERM.",
 		});
 	});
+
+	it("injects RFC artifact writing instruction into the system prompt when rfcArtifactPath is provided", async () => {
+		const runOpenCodeCli = vi.fn().mockResolvedValue({
+			stdout: "",
+			stderr: "",
+			exitCode: 0,
+			signal: null,
+		});
+		const runtime = new OpenCodeRuntime(
+			{},
+			{
+				runOpenCodeCli,
+				now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(50),
+				createSessionId: () => "sess-rfc-1",
+			},
+		);
+
+		await runtime.runInteractive({
+			cwd: "/tmp/slice",
+			prompt: "Draft the RFC.",
+			rfcArtifactPath: "/tmp/implementations/my-feature-rfc-draft.md",
+		});
+
+		expect(runOpenCodeCli).toHaveBeenCalledWith({
+			command: "opencode",
+			args: [
+				"--prompt",
+				[
+					"System instructions:\nWhen you are done, write the complete RFC draft as a Markdown document to:\n/tmp/implementations/my-feature-rfc-draft.md",
+					"Task:\nDraft the RFC.",
+				].join("\n\n"),
+			],
+			cwd: "/tmp/slice",
+			method: "runInteractive",
+			stdio: "inherit",
+		});
+	});
+
+	it("merges rfcArtifactPath instruction with an existing system prompt", async () => {
+		const runOpenCodeCli = vi.fn().mockResolvedValue({
+			stdout: "",
+			stderr: "",
+			exitCode: 0,
+			signal: null,
+		});
+		const runtime = new OpenCodeRuntime(
+			{},
+			{
+				runOpenCodeCli,
+				now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(50),
+				createSessionId: () => "sess-rfc-2",
+			},
+		);
+
+		await runtime.runInteractive({
+			cwd: "/tmp/slice",
+			prompt: "Draft the RFC.",
+			systemPrompt: "Stay focused on the task.",
+			rfcArtifactPath: "/tmp/implementations/my-feature-rfc-draft.md",
+		});
+
+		expect(runOpenCodeCli).toHaveBeenCalledWith({
+			command: "opencode",
+			args: [
+				"--prompt",
+				[
+					"System instructions:\nStay focused on the task.\n\nWhen you are done, write the complete RFC draft as a Markdown document to:\n/tmp/implementations/my-feature-rfc-draft.md",
+					"Task:\nDraft the RFC.",
+				].join("\n\n"),
+			],
+			cwd: "/tmp/slice",
+			method: "runInteractive",
+			stdio: "inherit",
+		});
+	});
 });
 
 function createEventStream(
