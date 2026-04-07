@@ -355,48 +355,7 @@ describe("ClaudeCodeRuntime", () => {
 		});
 	});
 
-	it("reads the RFC artifact file and returns its content as output after a successful session", async () => {
-		const cwd = await mkdtemp(join(tmpdir(), "claude-code-rfc-read-"));
-		const rfcPath = join(cwd, "my-feature-rfc-draft.md");
-		const rfcContent = "# RFC Draft\n\nThis is the RFC content.";
-		const sessionId = "sess-rfc-cc-read-1";
-		const runClaudeCli = vi.fn().mockResolvedValue({
-			stdout: "",
-			stderr: "",
-			exitCode: 0,
-			signal: null,
-		});
-		const runtime = new ClaudeCodeRuntime(
-			{},
-			{
-				runClaudeCli,
-				now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(100),
-				createSessionId: () => sessionId,
-			},
-		);
-
-		try {
-			await writeFile(rfcPath, rfcContent);
-
-			const result = await runtime.runInteractive({
-				cwd,
-				prompt: "Draft the RFC.",
-				rfcArtifactPath: rfcPath,
-			});
-
-			expect(result).toEqual({
-				success: true,
-				output: rfcContent,
-				sessionId,
-				costUsd: 0,
-				durationMs: 100,
-			});
-		} finally {
-			await rm(cwd, { recursive: true, force: true });
-		}
-	});
-
-	it("returns empty output when the RFC artifact file was not written by the agent", async () => {
+	it("keeps interactive output transport-agnostic when rfcArtifactPath is provided", async () => {
 		const sessionId = "sess-rfc-cc-missing";
 		const runtime = new ClaudeCodeRuntime(
 			{},
