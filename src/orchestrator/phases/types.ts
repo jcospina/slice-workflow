@@ -10,7 +10,6 @@ export const Phase = {
 	draftPolish: "draft-polish",
 	plan: "plan",
 	execute: "execute",
-	review: "review",
 	handoff: "handoff",
 } as const;
 

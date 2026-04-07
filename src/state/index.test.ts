@@ -205,16 +205,24 @@ describe("workflow runs", () => {
 		expect(active?.slug).toBe("b");
 	});
 
-	it("getActiveRun returns undefined when none running", () => {
+	it("getActiveRun returns awaiting_approval run when waiting for human response", () => {
+		sm.runs.create(makeRun({ status: "pending", slug: "a" }));
+		sm.runs.create(makeRun({ status: "awaiting_approval", slug: "waiting" }));
+		const active = sm.runs.getActive();
+		expect(active?.slug).toBe("waiting");
+	});
+
+	it("getActiveRun returns undefined when none active", () => {
 		sm.runs.create(makeRun({ status: "completed" }));
 		expect(sm.runs.getActive()).toBeUndefined();
 	});
 
-	it("getLastIncompleteRun finds pending or running", () => {
+	it("getLastIncompleteRun finds pending/running/awaiting_approval", () => {
 		sm.runs.create(makeRun({ status: "completed", slug: "done" }));
 		sm.runs.create(makeRun({ status: "pending", slug: "todo" }));
+		sm.runs.create(makeRun({ status: "awaiting_approval", slug: "waiting" }));
 		const incomplete = sm.runs.getLastIncomplete();
-		expect(incomplete?.slug).toBe("todo");
+		expect(incomplete?.slug).toBe("waiting");
 	});
 });
 
@@ -704,8 +712,9 @@ describe("resumability", () => {
 	it("getResumableRun finds incomplete run", () => {
 		sm.runs.create(makeRun({ status: "completed", slug: "done" }));
 		sm.runs.create(makeRun({ status: "running", slug: "active" }));
+		sm.runs.create(makeRun({ status: "awaiting_approval", slug: "waiting" }));
 		const resumable = sm.runs.getResumable();
-		expect(resumable?.slug).toBe("active");
+		expect(resumable?.slug).toBe("waiting");
 	});
 
 	it("getResumableRun returns undefined when all complete", () => {

@@ -82,7 +82,6 @@ function makeAllHandlers(): Partial<Record<PhaseName, PhaseHandler>> {
 		"draft-polish": makeHandler(),
 		plan: makeHandler(),
 		execute: makeHandler(),
-		review: makeHandler(),
 		handoff: makeHandler(),
 	};
 }
@@ -98,7 +97,6 @@ describe("canTransition", () => {
 		expect(canTransition(null, "draft-polish")).toBe(false);
 		expect(canTransition(null, "plan")).toBe(false);
 		expect(canTransition(null, "execute")).toBe(false);
-		expect(canTransition(null, "review")).toBe(false);
 		expect(canTransition(null, "handoff")).toBe(false);
 	});
 
@@ -106,20 +104,26 @@ describe("canTransition", () => {
 		expect(canTransition("rfc-draft", "draft-polish")).toBe(true);
 		expect(canTransition("draft-polish", "plan")).toBe(true);
 		expect(canTransition("plan", "execute")).toBe(true);
-		expect(canTransition("execute", "review")).toBe(true);
-		expect(canTransition("review", "handoff")).toBe(true);
+		expect(canTransition("execute", "handoff")).toBe(true);
 	});
 
 	it("disallows skipping phases", () => {
 		expect(canTransition("rfc-draft", "plan")).toBe(false);
 		expect(canTransition("rfc-draft", "execute")).toBe(false);
 		expect(canTransition("draft-polish", "execute")).toBe(false);
-		expect(canTransition("execute", "handoff")).toBe(false);
+		expect(canTransition("plan", "handoff")).toBe(false);
+	});
+
+	it("rejects top-level review transitions", () => {
+		expect(canTransition("execute", "review" as unknown as PhaseName)).toBe(false);
+		expect(canTransition("review" as unknown as PhaseName, "execute")).toBe(false);
+		expect(canTransition("review" as unknown as PhaseName, "handoff")).toBe(false);
 	});
 
 	it("disallows backward transitions", () => {
 		expect(canTransition("draft-polish", "rfc-draft")).toBe(false);
 		expect(canTransition("handoff", "rfc-draft")).toBe(false);
+		expect(canTransition("execute", "plan")).toBe(false);
 	});
 
 	it("allows same-phase transition (resume re-run)", () => {
@@ -128,7 +132,6 @@ describe("canTransition", () => {
 			"draft-polish",
 			"plan",
 			"execute",
-			"review",
 			"handoff",
 		] as PhaseName[]) {
 			expect(canTransition(phase, phase)).toBe(true);
@@ -217,7 +220,7 @@ describe("run() - fresh start", () => {
 		state.close();
 	});
 
-	it("calls all six phase handlers in order", async () => {
+	it("calls all five top-level phase handlers in order", async () => {
 		const state = createInMemoryStateManager();
 		const mocks = makeMocks();
 		const callOrder: PhaseName[] = [];
@@ -247,10 +250,6 @@ describe("run() - fresh start", () => {
 				callOrder.push(ctx.phase);
 				return Promise.resolve(result);
 			}),
-			review: vi.fn((ctx) => {
-				callOrder.push(ctx.phase);
-				return Promise.resolve(result);
-			}),
 			handoff: vi.fn((ctx) => {
 				callOrder.push(ctx.phase);
 				return Promise.resolve(result);
@@ -268,14 +267,7 @@ describe("run() - fresh start", () => {
 
 		await orch.run("test");
 
-		expect(callOrder).toEqual([
-			"rfc-draft",
-			"draft-polish",
-			"plan",
-			"execute",
-			"review",
-			"handoff",
-		]);
+		expect(callOrder).toEqual(["rfc-draft", "draft-polish", "plan", "execute", "handoff"]);
 		state.close();
 	});
 
@@ -296,13 +288,12 @@ describe("run() - fresh start", () => {
 
 		const runs = state.runs.list();
 		const phases = state.phases.listByRun(runs[0].id);
-		expect(phases).toHaveLength(6);
+		expect(phases).toHaveLength(5);
 		expect(phases.map((p) => p.phase)).toEqual([
 			"rfc-draft",
 			"draft-polish",
 			"plan",
 			"execute",
-			"review",
 			"handoff",
 		]);
 		expect(phases.every((p) => p.status === "completed")).toBe(true);
@@ -327,7 +318,7 @@ describe("run() - fresh start", () => {
 
 		await orch.run("test");
 
-		const phaseNames = ["rfc-draft", "draft-polish", "plan", "execute", "review", "handoff"];
+		const phaseNames = ["rfc-draft", "draft-polish", "plan", "execute", "handoff"];
 		for (const _phase of phaseNames) {
 			expect(events).toContain("phase_started");
 			expect(events).toContain("phase_completed");
@@ -399,6 +390,73 @@ describe("run() - fresh start", () => {
 
 		state.close();
 	});
+
+	it("does not invoke top-level review handlers", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+		const reviewHandler = vi.fn(async () => ({
+			status: "completed" as const,
+			agentSessionId: null,
+			costUsd: null,
+			durationMs: null,
+			error: null,
+			output: null,
+		}));
+
+		const phasesWithReviewOverride = {
+			...(makeAllHandlers() as Record<string, PhaseHandler>),
+			review: reviewHandler,
+		} as Partial<Record<PhaseName, PhaseHandler>>;
+
+		const orch = new WorkflowOrchestrator({
+			config: BASE_CONFIG,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			projectCwd: "/project",
+			phases: phasesWithReviewOverride,
+		});
+
+		await orch.run("feature Z");
+		expect(reviewHandler).not.toHaveBeenCalled();
+
+		state.close();
+	});
+
+	it("passes review config to execute handlers", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+		let executeCtx: PhaseContext | undefined;
+
+		const orch = new WorkflowOrchestrator({
+			config: BASE_CONFIG,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			projectCwd: "/project",
+			phases: {
+				...makeAllHandlers(),
+				execute: vi.fn((ctx) => {
+					executeCtx = ctx;
+					return Promise.resolve({
+						status: "completed" as const,
+						agentSessionId: null,
+						costUsd: null,
+						durationMs: null,
+						error: null,
+						output: null,
+					});
+				}),
+			},
+		});
+
+		await orch.run("execute review contract");
+		expect(executeCtx?.config.review.enabled).toBe(true);
+		expect(executeCtx?.config.review.maxIterations).toBe(2);
+		expect(executeCtx?.config.review.severityThreshold).toBe("major");
+
+		state.close();
+	});
 });
 
 describe("run() - crash recovery (resume)", () => {
@@ -406,12 +464,14 @@ describe("run() - crash recovery (resume)", () => {
 		const state = createInMemoryStateManager();
 		const mocks = makeMocks();
 
-		// Pre-populate: rfc-draft completed
+		// Pre-populate: rfc-draft completed; currentPhase advanced to draft-polish
+		// (the orchestrator always sets currentPhase before running a phase, so by
+		// the time rfc-draft has a completed record, currentPhase = "draft-polish")
 		const run = state.runs.create({
 			taskDescription: "resume task",
 			slug: "resume-task",
 			status: "running",
-			currentPhase: "rfc-draft",
+			currentPhase: "draft-polish",
 			baseBranch: "main",
 			workingBranch: null,
 		});
@@ -441,7 +501,6 @@ describe("run() - crash recovery (resume)", () => {
 				"draft-polish": draftPolishHandler,
 				plan: makeHandler(),
 				execute: makeHandler(),
-				review: makeHandler(),
 				handoff: makeHandler(),
 			},
 		});
@@ -710,6 +769,185 @@ describe("run() - approval gates", () => {
 
 		const runs = state.runs.list();
 		expect(runs[0].status).toBe("cancelled");
+
+		state.close();
+	});
+
+	it("reruns rfc-draft when requestApproval returns request_changes at RFC gate", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+
+		const requestChangesResponse: ApprovalResponse = {
+			decision: "request_changes",
+			feedback: "Please add more detail to the RFC",
+			respondedAt: new Date().toISOString(),
+			channel: "tui",
+		};
+
+		vi.mocked(mocks.messaging.requestApproval)
+			.mockResolvedValueOnce(requestChangesResponse)
+			.mockResolvedValueOnce({
+				decision: "approved",
+				feedback: null,
+				respondedAt: new Date().toISOString(),
+				channel: "tui",
+			});
+
+		const config = { ...BASE_CONFIG, approvalGates: { rfc: true, plan: false } };
+		const rfcDraftHandler = makeHandler();
+		const draftPolishHandler = makeHandler();
+
+		const orch = new WorkflowOrchestrator({
+			config,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			projectCwd: "/project",
+			phases: {
+				...makeAllHandlers(),
+				"rfc-draft": rfcDraftHandler,
+				"draft-polish": draftPolishHandler,
+			},
+		});
+
+		await orch.run("test");
+
+		expect(rfcDraftHandler).toHaveBeenCalledTimes(2);
+		expect(draftPolishHandler).toHaveBeenCalledTimes(1);
+		expect(mocks.messaging.requestApproval).toHaveBeenCalledTimes(2);
+		expect(state.runs.list()[0].status).toBe("completed");
+
+		const responses = state.notifications
+			.listByRun(state.runs.list()[0].id)
+			.filter((n) => n.eventType === "approval_response");
+		expect(responses).toHaveLength(2);
+		expect(
+			responses.some((entry) => {
+				const payload = JSON.parse(entry.payload) as {
+					decision?: string;
+					feedback?: string | null;
+				};
+				return (
+					payload.decision === "request_changes" &&
+					payload.feedback === requestChangesResponse.feedback
+				);
+			}),
+		).toBe(true);
+
+		state.close();
+	});
+
+	it("reruns plan when requestApproval returns request_changes at Plan gate", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+
+		vi.mocked(mocks.messaging.requestApproval)
+			.mockResolvedValueOnce({
+				decision: "request_changes",
+				feedback: "Adjust scope and sequencing",
+				respondedAt: new Date().toISOString(),
+				channel: "tui",
+			})
+			.mockResolvedValueOnce({
+				decision: "approved",
+				feedback: null,
+				respondedAt: new Date().toISOString(),
+				channel: "tui",
+			});
+
+		const config = { ...BASE_CONFIG, approvalGates: { rfc: false, plan: true } };
+		const planHandler = makeHandler();
+		const executeHandler = makeHandler();
+
+		const orch = new WorkflowOrchestrator({
+			config,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			projectCwd: "/project",
+			phases: {
+				...makeAllHandlers(),
+				plan: planHandler,
+				execute: executeHandler,
+			},
+		});
+
+		await orch.run("test");
+
+		expect(planHandler).toHaveBeenCalledTimes(2);
+		expect(executeHandler).toHaveBeenCalledTimes(1);
+		expect(mocks.messaging.requestApproval).toHaveBeenCalledTimes(2);
+		expect(state.runs.list()[0].status).toBe("completed");
+
+		state.close();
+	});
+
+	it("persists awaiting_approval and approval_requested before waiting for response", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+		let statusWhenApprovalRequested: string | undefined;
+		let approvalRequestedSnapshot:
+			| { eventType: string; userResponse: string | null; respondedAt: string | null }
+			| undefined;
+
+		const approvedResponse: ApprovalResponse = {
+			decision: "approved",
+			feedback: null,
+			respondedAt: new Date().toISOString(),
+			channel: "tui",
+		};
+
+		vi.mocked(mocks.messaging.requestApproval).mockImplementation(async () => {
+			const run = state.runs.list()[0];
+			if (!run) {
+				throw new Error("Expected run to exist when approval is requested");
+			}
+			statusWhenApprovalRequested = run.status;
+			const approvalRequested = state.notifications
+				.listByRun(run.id)
+				.find((entry) => entry.eventType === "approval_requested");
+			if (approvalRequested) {
+				approvalRequestedSnapshot = {
+					eventType: approvalRequested.eventType,
+					userResponse: approvalRequested.userResponse,
+					respondedAt: approvalRequested.respondedAt,
+				};
+			}
+			return approvedResponse;
+		});
+
+		const config = { ...BASE_CONFIG, approvalGates: { rfc: true, plan: false } };
+		const orch = new WorkflowOrchestrator({
+			config,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			projectCwd: "/project",
+			phases: makeAllHandlers(),
+		});
+
+		await orch.run("test");
+
+		expect(statusWhenApprovalRequested).toBe("awaiting_approval");
+		expect(approvalRequestedSnapshot).toEqual({
+			eventType: "approval_requested",
+			userResponse: null,
+			respondedAt: null,
+		});
+
+		const run = state.runs.list()[0];
+		const notifications = state.notifications.listByRun(run.id);
+		const approvalRequested = notifications.find(
+			(entry) => entry.eventType === "approval_requested",
+		);
+		const approvalResponse = notifications.find((entry) => entry.eventType === "approval_response");
+
+		expect(approvalRequested?.userResponse).toBe("approved");
+		expect(approvalRequested?.respondedAt).toBe(approvedResponse.respondedAt);
+		expect(approvalResponse?.userResponse).toBe("approved");
+		expect(
+			JSON.parse(approvalResponse?.payload ?? "{}") as { decision?: string; phase?: string },
+		).toEqual(expect.objectContaining({ decision: "approved", phase: "rfc-draft" }));
 
 		state.close();
 	});

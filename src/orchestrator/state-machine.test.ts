@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PhaseRecord, ResumeContext } from "../state/types";
+import type { PhaseName, ResumeContext } from "../state/types";
 import {
 	PHASE_SEQUENCE,
 	SKIPPABLE_PHASES,
@@ -8,16 +8,26 @@ import {
 	resolveStartingPhase,
 } from "./state-machine";
 
+// --- Helpers ---
+
+function makeResumeCtx(currentPhase: PhaseName | null = null): ResumeContext {
+	return {
+		run: { currentPhase } as ResumeContext["run"],
+		phases: [],
+		slices: [],
+		reviews: [],
+	};
+}
+
+// --- Tests ---
+
 describe("PHASE_SEQUENCE", () => {
-	it("contains all six phases in order", () => {
-		expect(PHASE_SEQUENCE).toEqual([
-			"rfc-draft",
-			"draft-polish",
-			"plan",
-			"execute",
-			"review",
-			"handoff",
-		]);
+	it("contains all five top-level phases in order", () => {
+		expect(PHASE_SEQUENCE).toEqual(["rfc-draft", "draft-polish", "plan", "execute", "handoff"]);
+	});
+
+	it("does not include review as a top-level phase", () => {
+		expect(PHASE_SEQUENCE).not.toContain("review");
 	});
 });
 
@@ -44,7 +54,6 @@ describe("canTransition", () => {
 		expect(canTransition(null, "draft-polish")).toBe(false);
 		expect(canTransition(null, "plan")).toBe(false);
 		expect(canTransition(null, "execute")).toBe(false);
-		expect(canTransition(null, "review")).toBe(false);
 		expect(canTransition(null, "handoff")).toBe(false);
 	});
 
@@ -52,25 +61,30 @@ describe("canTransition", () => {
 		expect(canTransition("rfc-draft", "draft-polish")).toBe(true);
 		expect(canTransition("draft-polish", "plan")).toBe(true);
 		expect(canTransition("plan", "execute")).toBe(true);
-		expect(canTransition("execute", "review")).toBe(true);
-		expect(canTransition("review", "handoff")).toBe(true);
+		expect(canTransition("execute", "handoff")).toBe(true);
 	});
 
-	it("disallows skipping phases", () => {
+	it("rejects review transitions as top-level moves", () => {
+		expect(canTransition("execute", "review" as unknown as PhaseName)).toBe(false);
+		expect(canTransition("review" as unknown as PhaseName, "execute")).toBe(false);
+		expect(canTransition("review" as unknown as PhaseName, "handoff")).toBe(false);
+	});
+
+	it("disallows skipping phases in the forward direction", () => {
 		expect(canTransition("rfc-draft", "plan")).toBe(false);
 		expect(canTransition("rfc-draft", "execute")).toBe(false);
 		expect(canTransition("draft-polish", "execute")).toBe(false);
-		expect(canTransition("execute", "handoff")).toBe(false);
-		expect(canTransition("plan", "review")).toBe(false);
+		expect(canTransition("plan", "handoff")).toBe(false);
 	});
 
 	it("disallows backward transitions", () => {
 		expect(canTransition("draft-polish", "rfc-draft")).toBe(false);
 		expect(canTransition("handoff", "rfc-draft")).toBe(false);
-		expect(canTransition("review", "execute")).toBe(false);
+		expect(canTransition("plan", "rfc-draft")).toBe(false);
+		expect(canTransition("execute", "plan")).toBe(false);
 	});
 
-	it("allows same-phase transition (resume re-run)", () => {
+	it("allows same-phase transition (resume re-run) for every phase", () => {
 		for (const phase of PHASE_SEQUENCE) {
 			expect(canTransition(phase, phase)).toBe(true);
 		}
@@ -82,53 +96,18 @@ describe("resolveStartingPhase", () => {
 		expect(resolveStartingPhase(undefined)).toBe("rfc-draft");
 	});
 
-	function makeResumeCtx(phases: Pick<PhaseRecord, "phase" | "status">[]): ResumeContext {
-		return {
-			run: {} as ResumeContext["run"],
-			phases: phases as PhaseRecord[],
-			slices: [],
-			reviews: [],
-		};
-	}
-
-	it("returns rfc-draft when no phases are completed", () => {
-		expect(resolveStartingPhase(makeResumeCtx([{ phase: "rfc-draft", status: "failed" }]))).toBe(
-			"rfc-draft",
-		);
+	it("returns rfc-draft when currentPhase is null", () => {
+		expect(resolveStartingPhase(makeResumeCtx(null))).toBe("rfc-draft");
 	});
 
-	it("returns the first incomplete phase when some phases are completed", () => {
-		expect(
-			resolveStartingPhase(
-				makeResumeCtx([
-					{ phase: "rfc-draft", status: "completed" },
-					{ phase: "draft-polish", status: "completed" },
-				]),
-			),
-		).toBe("plan");
+	it("returns run.currentPhase when set", () => {
+		expect(resolveStartingPhase(makeResumeCtx("plan"))).toBe("plan");
+		expect(resolveStartingPhase(makeResumeCtx("execute"))).toBe("execute");
+		expect(resolveStartingPhase(makeResumeCtx("handoff"))).toBe("handoff");
 	});
 
-	it("returns the first phase when all phases are completed (shouldn't normally happen)", () => {
-		// find returns undefined → falls back to PHASE_SEQUENCE[0]
-		expect(
-			resolveStartingPhase(
-				makeResumeCtx(PHASE_SEQUENCE.map((phase) => ({ phase, status: "completed" as const }))),
-			),
-		).toBe("rfc-draft");
-	});
-
-	it("skips skipped phases when resolving start (treats them as not completed)", () => {
-		// draft-polish is skipped (not completed), so it would be returned — but in
-		// practice the orchestrator moves past skipped phases too. This tests the
-		// raw resolveStartingPhase behaviour: skipped ≠ completed.
-		expect(
-			resolveStartingPhase(
-				makeResumeCtx([
-					{ phase: "rfc-draft", status: "completed" },
-					{ phase: "draft-polish", status: "skipped" },
-				]),
-			),
-		).toBe("draft-polish");
+	it("resumes from execute when top-level execution stops there", () => {
+		expect(resolveStartingPhase(makeResumeCtx("execute"))).toBe("execute");
 	});
 });
 
@@ -141,6 +120,7 @@ describe("isValidPhase", () => {
 
 	it("returns false for unknown strings", () => {
 		expect(isValidPhase("unknown")).toBe(false);
+		expect(isValidPhase("review")).toBe(false);
 		expect(isValidPhase("")).toBe(false);
 		expect(isValidPhase("RFC-DRAFT")).toBe(false);
 	});

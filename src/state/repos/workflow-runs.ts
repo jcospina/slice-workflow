@@ -112,7 +112,7 @@ export class WorkflowRunRepo {
 	getActive(): WorkflowRun | undefined {
 		const row = this.db
 			.prepare(
-				"SELECT * FROM workflow_runs WHERE status = 'running' ORDER BY created_at DESC LIMIT 1",
+				"SELECT * FROM workflow_runs WHERE status IN ('running', 'awaiting_approval') ORDER BY created_at DESC LIMIT 1",
 			)
 			.get() as SnakeRow | undefined;
 		return row ? mapRow(row) : undefined;
@@ -121,7 +121,7 @@ export class WorkflowRunRepo {
 	getLastIncomplete(): WorkflowRun | undefined {
 		const row = this.db
 			.prepare(
-				"SELECT * FROM workflow_runs WHERE status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1",
+				"SELECT * FROM workflow_runs WHERE status IN ('pending', 'running', 'awaiting_approval') ORDER BY created_at DESC LIMIT 1",
 			)
 			.get() as SnakeRow | undefined;
 		return row ? mapRow(row) : undefined;

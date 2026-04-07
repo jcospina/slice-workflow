@@ -1,15 +1,14 @@
 import type { PhaseName, ResumeContext } from "../state/types";
 
 /**
- * Canonical phase execution order.
- * The orchestrator iterates this sequence from the resolved starting phase to completion.
+ * Canonical top-level phase execution order for the happy path.
+ * Review and fix iterations are part of execute internals (not top-level phases).
  */
 export const PHASE_SEQUENCE: PhaseName[] = [
 	"rfc-draft",
 	"draft-polish",
 	"plan",
 	"execute",
-	"review",
 	"handoff",
 ];
 
@@ -21,37 +20,46 @@ export const PHASE_SEQUENCE: PhaseName[] = [
 export const SKIPPABLE_PHASES: ReadonlySet<PhaseName> = new Set<PhaseName>(["draft-polish"]);
 
 /**
+ * Explicit transition graph.
+ * Each entry lists every top-level phase that may follow the key phase.
+ * Same-phase (resume re-run) is always valid and is handled separately in canTransition.
+ */
+const VALID_TRANSITIONS: Readonly<Record<string, ReadonlySet<PhaseName>>> = {
+	start: new Set<PhaseName>(["rfc-draft"]),
+	"rfc-draft": new Set<PhaseName>(["draft-polish"]),
+	"draft-polish": new Set<PhaseName>(["plan"]),
+	plan: new Set<PhaseName>(["execute"]),
+	execute: new Set<PhaseName>(["handoff"]),
+	handoff: new Set<PhaseName>([]),
+};
+
+/**
  * Returns true when transitioning from `from` to `to` is a valid move.
- * Rules:
- *   - null → "rfc-draft"  (fresh workflow start)
+ * Rules encoded in VALID_TRANSITIONS plus:
+ *   - null → "rfc-draft"  (fresh workflow start, represented as "start" in the map)
  *   - phase → same phase  (re-running a failed or partial phase on resume)
- *   - phase → next phase  (normal forward progression)
- * Everything else is invalid.
  */
 export function canTransition(from: PhaseName | null, to: PhaseName): boolean {
-	if (from === null) {
-		return to === PHASE_SEQUENCE[0];
-	}
 	if (from === to) {
-		return true;
+		return true; // resume re-run of same phase is always valid
 	}
-	const fromIdx = PHASE_SEQUENCE.indexOf(from);
-	const toIdx = PHASE_SEQUENCE.indexOf(to);
-	return toIdx === fromIdx + 1;
+	const key = from === null ? "start" : from;
+	return (VALID_TRANSITIONS[key] ?? new Set()).has(to);
 }
 
 /**
- * Given the resume context (if any), returns the first phase that has not yet
- * completed. On a fresh run (no resumeCtx) this is always the first phase.
+ * Returns the phase to start from when resuming an interrupted run.
+ * Uses run.currentPhase as the authoritative source — the orchestrator
+ * always writes currentPhase before executing a phase, so it reflects
+ * exactly where top-level execution stopped.
+ *
+ * Falls back to the first phase only for brand-new runs (currentPhase = null).
  */
 export function resolveStartingPhase(resumeCtx: ResumeContext | undefined): PhaseName {
 	if (!resumeCtx) {
 		return PHASE_SEQUENCE[0];
 	}
-	const completed = new Set(
-		resumeCtx.phases.filter((p) => p.status === "completed").map((p) => p.phase),
-	);
-	return PHASE_SEQUENCE.find((p) => !completed.has(p)) ?? PHASE_SEQUENCE[0];
+	return resumeCtx.run.currentPhase ?? PHASE_SEQUENCE[0];
 }
 
 /**
