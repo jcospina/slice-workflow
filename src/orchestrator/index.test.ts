@@ -82,6 +82,7 @@ function makeAllHandlers(): Partial<Record<PhaseName, PhaseHandler>> {
 		"draft-polish": makeHandler(),
 		plan: makeHandler(),
 		execute: makeHandler(),
+		review: makeHandler(),
 		handoff: makeHandler(),
 	};
 }
@@ -97,6 +98,7 @@ describe("canTransition", () => {
 		expect(canTransition(null, "draft-polish")).toBe(false);
 		expect(canTransition(null, "plan")).toBe(false);
 		expect(canTransition(null, "execute")).toBe(false);
+		expect(canTransition(null, "review")).toBe(false);
 		expect(canTransition(null, "handoff")).toBe(false);
 	});
 
@@ -104,13 +106,15 @@ describe("canTransition", () => {
 		expect(canTransition("rfc-draft", "draft-polish")).toBe(true);
 		expect(canTransition("draft-polish", "plan")).toBe(true);
 		expect(canTransition("plan", "execute")).toBe(true);
-		expect(canTransition("execute", "handoff")).toBe(true);
+		expect(canTransition("execute", "review")).toBe(true);
+		expect(canTransition("review", "handoff")).toBe(true);
 	});
 
 	it("disallows skipping phases", () => {
 		expect(canTransition("rfc-draft", "plan")).toBe(false);
 		expect(canTransition("rfc-draft", "execute")).toBe(false);
 		expect(canTransition("draft-polish", "execute")).toBe(false);
+		expect(canTransition("execute", "handoff")).toBe(false);
 	});
 
 	it("disallows backward transitions", () => {
@@ -124,6 +128,7 @@ describe("canTransition", () => {
 			"draft-polish",
 			"plan",
 			"execute",
+			"review",
 			"handoff",
 		] as PhaseName[]) {
 			expect(canTransition(phase, phase)).toBe(true);
@@ -212,7 +217,7 @@ describe("run() - fresh start", () => {
 		state.close();
 	});
 
-	it("calls all five phase handlers in order", async () => {
+	it("calls all six phase handlers in order", async () => {
 		const state = createInMemoryStateManager();
 		const mocks = makeMocks();
 		const callOrder: PhaseName[] = [];
@@ -242,6 +247,10 @@ describe("run() - fresh start", () => {
 				callOrder.push(ctx.phase);
 				return Promise.resolve(result);
 			}),
+			review: vi.fn((ctx) => {
+				callOrder.push(ctx.phase);
+				return Promise.resolve(result);
+			}),
 			handoff: vi.fn((ctx) => {
 				callOrder.push(ctx.phase);
 				return Promise.resolve(result);
@@ -259,7 +268,14 @@ describe("run() - fresh start", () => {
 
 		await orch.run("test");
 
-		expect(callOrder).toEqual(["rfc-draft", "draft-polish", "plan", "execute", "handoff"]);
+		expect(callOrder).toEqual([
+			"rfc-draft",
+			"draft-polish",
+			"plan",
+			"execute",
+			"review",
+			"handoff",
+		]);
 		state.close();
 	});
 
@@ -280,12 +296,13 @@ describe("run() - fresh start", () => {
 
 		const runs = state.runs.list();
 		const phases = state.phases.listByRun(runs[0].id);
-		expect(phases).toHaveLength(5);
+		expect(phases).toHaveLength(6);
 		expect(phases.map((p) => p.phase)).toEqual([
 			"rfc-draft",
 			"draft-polish",
 			"plan",
 			"execute",
+			"review",
 			"handoff",
 		]);
 		expect(phases.every((p) => p.status === "completed")).toBe(true);
@@ -310,7 +327,7 @@ describe("run() - fresh start", () => {
 
 		await orch.run("test");
 
-		const phaseNames = ["rfc-draft", "draft-polish", "plan", "execute", "handoff"];
+		const phaseNames = ["rfc-draft", "draft-polish", "plan", "execute", "review", "handoff"];
 		for (const _phase of phaseNames) {
 			expect(events).toContain("phase_started");
 			expect(events).toContain("phase_completed");
@@ -424,6 +441,7 @@ describe("run() - crash recovery (resume)", () => {
 				"draft-polish": draftPolishHandler,
 				plan: makeHandler(),
 				execute: makeHandler(),
+				review: makeHandler(),
 				handoff: makeHandler(),
 			},
 		});

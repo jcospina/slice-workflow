@@ -2,7 +2,7 @@
 
 export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
-export type PhaseName = "rfc-draft" | "draft-polish" | "plan" | "execute" | "handoff";
+export type PhaseName = "rfc-draft" | "draft-polish" | "plan" | "execute" | "review" | "handoff";
 
 export type PhaseStatus = "pending" | "running" | "completed" | "failed" | "skipped";
 

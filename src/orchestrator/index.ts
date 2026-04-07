@@ -15,6 +15,11 @@ import type {
 	PromptBuilder,
 	WorktreeManager,
 } from "./phases/types";
+import {
+	PHASE_SEQUENCE,
+	canTransition as _canTransition,
+	resolveStartingPhase as _resolveStartingPhase,
+} from "./state-machine";
 
 export type {
 	ApprovalDecision,
@@ -30,9 +35,9 @@ export type {
 	WorktreeManager,
 } from "./phases/types";
 
-// --- Constants ---
+export { canTransition } from "./state-machine";
 
-const PHASE_SEQUENCE: PhaseName[] = ["rfc-draft", "draft-polish", "plan", "execute", "handoff"];
+// --- Constants ---
 
 /** Maps a phase to the approvalGates config key that controls its gate. */
 const APPROVAL_GATE_MAP: Partial<Record<PhaseName, keyof ResolvedConfig["approvalGates"]>> = {
@@ -40,44 +45,12 @@ const APPROVAL_GATE_MAP: Partial<Record<PhaseName, keyof ResolvedConfig["approva
 	plan: "plan",
 };
 
-// --- Pure helpers ---
-
-/**
- * Returns true when transitioning from `from` to `to` is a valid move in the
- * phase state machine.  Rules:
- *   - null → "rfc-draft"  (fresh workflow start)
- *   - phase → same phase  (re-running a failed or partial phase on resume)
- *   - phase → next phase  (normal forward progression)
- * Everything else is invalid and the orchestrator will throw StateError.
- */
-export function canTransition(from: PhaseName | null, to: PhaseName): boolean {
-	if (from === null) {
-		return to === "rfc-draft";
-	}
-	if (from === to) {
-		return true; // resume re-run of same phase
-	}
-	const fromIdx = PHASE_SEQUENCE.indexOf(from);
-	const toIdx = PHASE_SEQUENCE.indexOf(to);
-	return toIdx === fromIdx + 1;
-}
-
 function slugify(task: string): string {
 	return task
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-|-$/g, "")
 		.slice(0, 50);
-}
-
-function resolveStartingPhase(resumeContext: ResumeContext | undefined): PhaseName {
-	if (!resumeContext) {
-		return PHASE_SEQUENCE[0];
-	}
-	const completed = new Set(
-		resumeContext.phases.filter((p) => p.status === "completed").map((p) => p.phase),
-	);
-	return PHASE_SEQUENCE.find((p) => !completed.has(p)) ?? PHASE_SEQUENCE[0];
 }
 
 function toErrorMessage(error: unknown): string {
@@ -98,6 +71,7 @@ const PHASE_STUBS: Record<PhaseName, PhaseHandler> = {
 	"draft-polish": makeStub("draft-polish"),
 	plan: makeStub("plan"),
 	execute: makeStub("execute"),
+	review: makeStub("review"),
 	handoff: makeStub("handoff"),
 };
 
@@ -177,7 +151,7 @@ export class WorkflowOrchestrator {
 		let { run, resumeCtx } = this.resolveOrCreateRun(task);
 		run = this.state.runs.update(run.id, { status: "running" });
 
-		const startIdx = PHASE_SEQUENCE.indexOf(resolveStartingPhase(resumeCtx));
+		const startIdx = PHASE_SEQUENCE.indexOf(_resolveStartingPhase(resumeCtx));
 
 		try {
 			for (let i = startIdx; i < PHASE_SEQUENCE.length; i++) {
@@ -242,7 +216,7 @@ export class WorkflowOrchestrator {
 		phase: PhaseName,
 		resumeCtx: ResumeContext | undefined,
 	): Promise<boolean> {
-		if (!canTransition(run.currentPhase, phase)) {
+		if (!_canTransition(run.currentPhase, phase)) {
 			throw new StateError(`Invalid phase transition: ${run.currentPhase ?? "null"} → ${phase}`, {
 				phase,
 			});
