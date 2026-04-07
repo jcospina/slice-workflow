@@ -49,6 +49,11 @@ function makeMocks() {
 	};
 
 	const prompts: PromptBuilder = {
+		buildPrompt: vi.fn().mockResolvedValue({
+			phase: "plan",
+			layers: { system: "system", context: "context", task: "task" },
+			composedPrompt: "system\n\ncontext\n\ntask",
+		}),
 		buildSystemPrompt: vi.fn().mockResolvedValue("system"),
 		buildTaskPrompt: vi.fn().mockResolvedValue("task"),
 	};
