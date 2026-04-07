@@ -1,0 +1,22 @@
+{
+	"description": "UI scopes already migrated to data facades; keep empty in Slice 0 and append as slices complete.",
+	"scopes": [
+		"src/app/login/page.tsx",
+		"src/app/onboarding/page.tsx",
+		"src/app/home/layout.tsx",
+		"src/app/home/profile/page.tsx",
+		"src/app/invite/[token]/page.tsx",
+		"src/app/home/profile/currency-select.tsx",
+		"src/app/home/profile/language-select.tsx",
+		"src/app/home/profile/ai-enabled.tsx",
+		"src/components/household-form/household-form.tsx",
+		"src/app/home/stats/page.tsx",
+		"src/components/expense-details/expense-details-dialog.tsx",
+		"src/app/home/page.tsx",
+		"src/components/chat/chat.tsx",
+		"src/features/chat/hooks/use-household-realtime.ts",
+		"src/features/chat/hooks/use-household-sync.ts",
+		"src/features/chat/hooks/use-personal-realtime.ts",
+		"src/features/chat/hooks/use-personal-sync.ts"
+	]
+}
