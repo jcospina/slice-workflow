@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { VERSION } from "../index";
 import { registerResumeCommand } from "./commands/resume";
+import { registerRfcDraftCommand } from "./commands/rfc-draft";
 import { registerSetupGithubCommand } from "./commands/setup-github";
 import { startTui } from "./tui/index";
 
@@ -26,6 +27,7 @@ export function createProgram(): Command {
 		});
 
 	registerResumeCommand(program);
+	registerRfcDraftCommand(program);
 	registerSetupGithubCommand(program);
 
 	program.showHelpAfterError(true);

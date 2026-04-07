@@ -14,7 +14,6 @@ import {
 	buildInteractiveClaudeArgs,
 	buildInteractivePrompt,
 	normalizeRunResult,
-	readRfcArtifact,
 	runClaudeCli,
 } from "./utils";
 
@@ -106,13 +105,6 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 			stdio: "inherit",
 		});
 		const durationMs = Math.max(0, this.now() - startedAt);
-		const result = normalizeRunResult(execution, durationMs, sessionId);
-
-		if (result.success && options.rfcArtifactPath) {
-			const rfcContent = await readRfcArtifact(options.rfcArtifactPath);
-			return { ...result, output: rfcContent };
-		}
-
-		return result;
+		return normalizeRunResult(execution, durationMs, sessionId);
 	}
 }

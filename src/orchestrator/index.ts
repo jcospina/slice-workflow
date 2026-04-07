@@ -4,6 +4,7 @@ import type { AgentRuntime } from "../runtime/types";
 import type { StateManager } from "../state";
 import type { PhaseName, ResumeContext, WorkflowRun } from "../state/types";
 import { PhaseError, StateError } from "../utils/errors";
+import { runRfcDraftPhase } from "./phases/rfc-draft";
 import type {
 	ApprovalDecision,
 	MessagingManager,
@@ -69,7 +70,7 @@ function makeStub(phase: PhaseName): PhaseHandler {
 }
 
 const PHASE_STUBS: Record<PhaseName, PhaseHandler> = {
-	"rfc-draft": makeStub("rfc-draft"),
+	"rfc-draft": runRfcDraftPhase,
 	"draft-polish": makeStub("draft-polish"),
 	plan: makeStub("plan"),
 	execute: makeStub("execute"),
@@ -108,8 +109,8 @@ export interface WorkflowOrchestratorOptions {
  *   5. On any phase error it persists the failure to SQLite, fires a
  *      `phase_failed` notification, and re-throws so the CLI can surface it.
  *
- * Phase handlers are stub implementations until the individual phase tickets
- * (SLICEWORKF-14, -15, -16, -23, -25, -28) are merged.  Concrete handlers can
+ * Phase handlers are mostly stubs until the remaining phase tickets
+ * (SLICEWORKF-15, -16, -23, -25, -28) are merged.  Concrete handlers can
  * be injected via `options.phases` — the same mechanism used by the test suite.
  */
 export class WorkflowOrchestrator {

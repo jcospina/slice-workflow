@@ -163,7 +163,7 @@ describe("WorkflowOrchestrator constructor", () => {
 		state.close();
 	});
 
-	it("stub handlers throw PhaseError with 'not yet implemented'", async () => {
+	it("throws not-yet-implemented when an unimplemented default phase is reached", async () => {
 		const state = createInMemoryStateManager();
 		const mocks = makeMocks();
 
@@ -173,10 +173,12 @@ describe("WorkflowOrchestrator constructor", () => {
 			state,
 			...mocks,
 			projectCwd: "/project",
-			// No phases overrides — stubs are used
+			phases: {
+				"rfc-draft": makeHandler(),
+			},
 		});
 
-		// Access private registry via run() which will call stub and fail
+		// draft-polish remains unimplemented in defaults.
 		await expect(orch.run("test task")).rejects.toThrow(PhaseError);
 		await expect(orch.run("test task")).rejects.toThrow("not yet implemented");
 
