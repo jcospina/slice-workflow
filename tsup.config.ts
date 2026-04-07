@@ -5,11 +5,11 @@ import { defineConfig } from "tsup";
 const BUNDLED_EXAMPLES = [
 	{
 		name: "decouple-data-layer",
-		source: "implementations/decouple-data-layer",
+		source: "examples/decouple-data-layer",
 	},
 	{
 		name: "income-tracking",
-		source: "implementations/income-tracking",
+		source: "examples/income-tracking",
 	},
 ] as const;
 
