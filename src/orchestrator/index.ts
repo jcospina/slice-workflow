@@ -15,6 +15,11 @@ import type {
 	PromptBuilder,
 	WorktreeManager,
 } from "./phases/types";
+import {
+	PHASE_SEQUENCE,
+	canTransition as _canTransition,
+	resolveStartingPhase as _resolveStartingPhase,
+} from "./state-machine";
 
 export type {
 	ApprovalDecision,
@@ -30,9 +35,9 @@ export type {
 	WorktreeManager,
 } from "./phases/types";
 
-// --- Constants ---
+export { canTransition } from "./state-machine";
 
-const PHASE_SEQUENCE: PhaseName[] = ["rfc-draft", "draft-polish", "plan", "execute", "handoff"];
+// --- Constants ---
 
 /** Maps a phase to the approvalGates config key that controls its gate. */
 const APPROVAL_GATE_MAP: Partial<Record<PhaseName, keyof ResolvedConfig["approvalGates"]>> = {
@@ -40,27 +45,7 @@ const APPROVAL_GATE_MAP: Partial<Record<PhaseName, keyof ResolvedConfig["approva
 	plan: "plan",
 };
 
-// --- Pure helpers ---
-
-/**
- * Returns true when transitioning from `from` to `to` is a valid move in the
- * phase state machine.  Rules:
- *   - null → "rfc-draft"  (fresh workflow start)
- *   - phase → same phase  (re-running a failed or partial phase on resume)
- *   - phase → next phase  (normal forward progression)
- * Everything else is invalid and the orchestrator will throw StateError.
- */
-export function canTransition(from: PhaseName | null, to: PhaseName): boolean {
-	if (from === null) {
-		return to === "rfc-draft";
-	}
-	if (from === to) {
-		return true; // resume re-run of same phase
-	}
-	const fromIdx = PHASE_SEQUENCE.indexOf(from);
-	const toIdx = PHASE_SEQUENCE.indexOf(to);
-	return toIdx === fromIdx + 1;
-}
+type GateOutcome = "advance" | "repeat" | "stop";
 
 function slugify(task: string): string {
 	return task
@@ -68,16 +53,6 @@ function slugify(task: string): string {
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-|-$/g, "")
 		.slice(0, 50);
-}
-
-function resolveStartingPhase(resumeContext: ResumeContext | undefined): PhaseName {
-	if (!resumeContext) {
-		return PHASE_SEQUENCE[0];
-	}
-	const completed = new Set(
-		resumeContext.phases.filter((p) => p.status === "completed").map((p) => p.phase),
-	);
-	return PHASE_SEQUENCE.find((p) => !completed.has(p)) ?? PHASE_SEQUENCE[0];
 }
 
 function toErrorMessage(error: unknown): string {
@@ -177,16 +152,23 @@ export class WorkflowOrchestrator {
 		let { run, resumeCtx } = this.resolveOrCreateRun(task);
 		run = this.state.runs.update(run.id, { status: "running" });
 
-		const startIdx = PHASE_SEQUENCE.indexOf(resolveStartingPhase(resumeCtx));
+		let currentPhase: PhaseName = _resolveStartingPhase(resumeCtx);
 
 		try {
-			for (let i = startIdx; i < PHASE_SEQUENCE.length; i++) {
-				const phase = PHASE_SEQUENCE[i];
-				const stop = await this.runPhaseWithGate(run, phase, resumeCtx);
+			while (true) {
+				const outcome = await this.runPhaseWithGate(run, currentPhase, resumeCtx);
 				run = this.state.runs.get(run.id) ?? run; // refresh after updates inside runPhaseWithGate
-				if (stop) {
+				if (outcome === "stop") {
 					return;
 				}
+				if (outcome === "repeat") {
+					continue;
+				}
+				const nextPhase = this.resolveNextPhase(currentPhase);
+				if (nextPhase === null) {
+					break;
+				}
+				currentPhase = nextPhase;
 			}
 
 			run = this.state.runs.update(run.id, { status: "completed" });
@@ -194,15 +176,18 @@ export class WorkflowOrchestrator {
 			this.emitEvent({ type: "workflow_completed", runId: run.id, totalCostUsd });
 		} catch (error) {
 			if (!(error instanceof PhaseError)) {
-				// Unexpected error not already handled inside runPhase
-				const current = this.state.runs.get(run.id);
-				if (current && current.status === "running") {
-					this.state.runs.update(run.id, { status: "failed" });
-				}
-				this.emitEvent({ type: "workflow_failed", runId: run.id, error: toErrorMessage(error) });
+				this.handleUnexpectedRunError(run.id, error);
 			}
 			throw error;
 		}
+	}
+
+	private handleUnexpectedRunError(runId: string, error: unknown): void {
+		const current = this.state.runs.get(runId);
+		if (current && (current.status === "running" || current.status === "awaiting_approval")) {
+			this.state.runs.update(runId, { status: "failed" });
+		}
+		this.emitEvent({ type: "workflow_failed", runId, error: toErrorMessage(error) });
 	}
 
 	/** Returns { run, resumeCtx } — either a fresh run or the existing incomplete one. */
@@ -235,14 +220,14 @@ export class WorkflowOrchestrator {
 
 	/**
 	 * Runs a single phase and handles its approval gate.
-	 * Returns true if the workflow loop should stop (cancelled, rejected).
+	 * Returns whether the workflow should advance, repeat the phase, or stop.
 	 */
 	private async runPhaseWithGate(
 		run: WorkflowRun,
 		phase: PhaseName,
 		resumeCtx: ResumeContext | undefined,
-	): Promise<boolean> {
-		if (!canTransition(run.currentPhase, phase)) {
+	): Promise<GateOutcome> {
+		if (!_canTransition(run.currentPhase, phase)) {
 			throw new StateError(`Invalid phase transition: ${run.currentPhase ?? "null"} → ${phase}`, {
 				phase,
 			});
@@ -267,31 +252,32 @@ export class WorkflowOrchestrator {
 			return this.runApprovalGate(run, phase, result.output);
 		}
 
-		return false;
+		return "advance";
 	}
 
 	/**
 	 * Handles an approval gate after a completed phase.
-	 * Returns true if the workflow should stop.
+	 * Returns whether the workflow should advance, repeat the phase, or stop.
 	 */
 	private async runApprovalGate(
 		run: WorkflowRun,
 		phase: PhaseName,
 		artifactHint: string | null,
-	): Promise<boolean> {
+	): Promise<GateOutcome> {
 		const decision = await this.handleApprovalGate(run, phase, artifactHint);
 		if (decision === "approved") {
-			return false;
+			return "advance";
 		}
 
-		const reason =
-			decision === "rejected"
-				? `Rejected at ${phase} approval gate`
-				: `Changes requested at ${phase} approval gate`;
+		if (decision === "request_changes") {
+			return "repeat";
+		}
+
+		const reason = `Rejected at ${phase} approval gate`;
 
 		this.state.runs.update(run.id, { status: "cancelled" });
 		this.emitEvent({ type: "workflow_failed", runId: run.id, error: reason });
-		return true;
+		return "stop";
 	}
 
 	/**
@@ -385,11 +371,28 @@ export class WorkflowOrchestrator {
 			artifactPath: resolvedArtifactPath,
 		});
 
+		this.state.runs.update(run.id, { status: "awaiting_approval" });
+		const approvalRequestLog = this.state.notifications.create({
+			runId: run.id,
+			channel: "tui",
+			eventType: "approval_requested",
+			payload: JSON.stringify({ phase, artifactPath: resolvedArtifactPath }),
+			userResponse: null,
+			sentAt: new Date().toISOString(),
+			respondedAt: null,
+		});
+
 		const response = await this.messaging.requestApproval({
 			runId: run.id,
 			phase,
 			artifactPath: resolvedArtifactPath,
 			content: `Approval required for phase: ${phase}`,
+		});
+
+		this.state.runs.update(run.id, { status: "running" });
+		this.state.notifications.update(approvalRequestLog.id, {
+			userResponse: response.decision,
+			respondedAt: response.respondedAt,
 		});
 
 		this.state.notifications.create({
@@ -471,6 +474,23 @@ export class WorkflowOrchestrator {
 			resumeContext: resumeCtx,
 			onEvent: this.onEvent,
 		};
+	}
+
+	/**
+	 * Determine what phase should run after `justCompleted` finishes successfully.
+	 * Returns null when the workflow is done (handoff just completed).
+	 * Top-level phases always advance linearly through PHASE_SEQUENCE.
+	 * Review loops are part of execute internals, not top-level orchestration.
+	 */
+	private resolveNextPhase(justCompleted: PhaseName): PhaseName | null {
+		if (justCompleted === "handoff") {
+			return null;
+		}
+		const idx = PHASE_SEQUENCE.indexOf(justCompleted);
+		if (idx < 0 || idx >= PHASE_SEQUENCE.length - 1) {
+			return null;
+		}
+		return PHASE_SEQUENCE[idx + 1];
 	}
 
 	/**

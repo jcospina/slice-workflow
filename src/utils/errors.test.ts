@@ -70,10 +70,10 @@ describe("WorktreeError", () => {
 
 describe("PhaseError", () => {
 	it("extends SliceError with phase context", () => {
-		const err = new PhaseError("review failed", { phase: "review", sliceIndex: 0 });
+		const err = new PhaseError("execute failed", { phase: "execute", sliceIndex: 0 });
 		expect(err).toBeInstanceOf(SliceError);
 		expect(err.name).toBe("PhaseError");
-		expect(err.context.phase).toBe("review");
+		expect(err.context.phase).toBe("execute");
 		expect(err.context.sliceIndex).toBe(0);
 	});
 });

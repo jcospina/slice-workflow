@@ -3,6 +3,16 @@ import type { AgentRuntime } from "../../runtime/types";
 import type { StateManager } from "../../state";
 import type { NotificationChannel, PhaseName, ResumeContext, WorkflowRun } from "../../state/types";
 
+// --- Phase enum ---
+
+export const Phase = {
+	rfcDraft: "rfc-draft",
+	draftPolish: "draft-polish",
+	plan: "plan",
+	execute: "execute",
+	handoff: "handoff",
+} as const;
+
 // --- Collaborator interfaces ---
 
 export interface WorktreeManager {

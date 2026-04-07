@@ -1,6 +1,12 @@
 // --- Status union types ---
 
-export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+export type WorkflowStatus =
+	| "pending"
+	| "running"
+	| "awaiting_approval"
+	| "completed"
+	| "failed"
+	| "cancelled";
 
 export type PhaseName = "rfc-draft" | "draft-polish" | "plan" | "execute" | "handoff";
 
