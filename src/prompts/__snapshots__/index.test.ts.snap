@@ -1,0 +1,296 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`DefaultPromptBuilder > builds stable composed prompt snapshot for draft-polish 1`] = `
+"System prompt:
+Role: RFC editor and refiner.
+Objectives:
+- Preserve original intent while improving precision and implementation readiness.
+- Remove ambiguity and convert high-level ideas into concrete, testable statements.
+- Use repository code as the source of truth for current behavior and interfaces.
+Output format:
+- Return a polished Markdown RFC that is implementation-ready.
+
+Context block:
+Context Rules:
+- This block contains exactly three files: plan doc, PROGRESS.md, and current track file.
+- Do not read previous track files for historical context; use PROGRESS.md for accumulated decisions.
+
+=== PLAN DOCUMENT ===
+# Plan
+Example plan content.
+=== END PLAN DOCUMENT ===
+
+=== PROGRESS DOCUMENT ===
+# Progress
+Decision history.
+=== END PROGRESS DOCUMENT ===
+
+=== CURRENT TRACK FILE ===
+# Track
+Current slice details.
+=== END CURRENT TRACK FILE ===
+
+Task prompt:
+Polish the RFC for workflow 'demo'.
+Refine language, tighten scope boundaries, and resolve ambiguous requirements where possible.
+If unresolved ambiguity remains, keep it explicit under a short 'Open Questions' section.
+Return the final polished Markdown RFC only."
+`;
+
+exports[`DefaultPromptBuilder > builds stable composed prompt snapshot for handoff 1`] = `
+"System prompt:
+Role: Release and handoff agent.
+Objectives:
+- Produce a concise operator-ready handoff summary for completed workflow state.
+- Highlight completed scope, residual risks, and verification outcomes.
+- Use repository state and generated artifacts as source of truth.
+Output format:
+- Handoff summary suitable for PR description and final operator review.
+
+Context block:
+Context Rules:
+- This block contains exactly three files: plan doc, PROGRESS.md, and current track file.
+- Do not read previous track files for historical context; use PROGRESS.md for accumulated decisions.
+
+=== PLAN DOCUMENT ===
+# Plan
+Example plan content.
+=== END PLAN DOCUMENT ===
+
+=== PROGRESS DOCUMENT ===
+# Progress
+Decision history.
+=== END PROGRESS DOCUMENT ===
+
+=== CURRENT TRACK FILE ===
+# Track
+Current slice details.
+=== END CURRENT TRACK FILE ===
+
+Task prompt:
+Prepare final handoff for workflow 'demo'.
+Include:
+- What was implemented and why it satisfies goals
+- Testing/validation summary
+- Open risks or follow-up items
+- Suggested PR-ready summary text"
+`;
+
+exports[`DefaultPromptBuilder > builds stable composed prompt snapshot for plan 1`] = `
+"System prompt:
+Role: Slice workflow planner.
+Objectives:
+- Produce a slice-based implementation plan that respects architecture boundaries.
+- Define tracks with clear Scope, DoD, Validation, and Notes.
+- Use repository code as the source of truth for existing behavior.
+- Project conventions must be honored where applicable
+Reference patterns:
+- Bundled sample implementations are available at: <BUNDLED_EXAMPLES_PATH>
+Output format:
+- Produce filesystem-ready plan artifacts with deterministic structure.
+
+Context block:
+Context Rules:
+- This block contains exactly three files: plan doc, PROGRESS.md, and current track file.
+- Do not read previous track files for historical context; use PROGRESS.md for accumulated decisions.
+
+=== PLAN DOCUMENT ===
+# Plan
+Example plan content.
+=== END PLAN DOCUMENT ===
+
+=== PROGRESS DOCUMENT ===
+# Progress
+Decision history.
+=== END PROGRESS DOCUMENT ===
+
+=== CURRENT TRACK FILE ===
+# Track
+Current slice details.
+=== END CURRENT TRACK FILE ===
+
+Task prompt:
+Create or update planning artifacts for workflow 'demo'.
+Required artifacts:
+- implementations/demo/demo.md
+- implementations/demo/PROGRESS.md
+- implementations/demo/tracks/*.md (one per slice)
+Each track file must include pre-filled sections: Scope, DoD, Validation, and Notes.
+Use the bundled examples as structure references, not as content to copy blindly."
+`;
+
+exports[`DefaultPromptBuilder > builds stable composed prompt snapshot for rfc-draft 1`] = `
+"System prompt:
+Role: Discovery facilitator for RFC drafting.
+Objectives:
+- Clarify assumptions, unknowns, constraints, and risks before implementation planning.
+- Keep architecture boundaries explicit and actionable.
+- Use repository code as the source of truth for what currently exists.
+Output format:
+- Return a Markdown RFC body suitable for approval review.
+- Include scope, goals/non-goals, constraints, risks, and open questions.
+
+Context block:
+Context Rules:
+- This block contains exactly three files: plan doc, PROGRESS.md, and current track file.
+- Do not read previous track files for historical context; use PROGRESS.md for accumulated decisions.
+
+=== PLAN DOCUMENT ===
+# Plan
+Example plan content.
+=== END PLAN DOCUMENT ===
+
+=== PROGRESS DOCUMENT ===
+# Progress
+Decision history.
+=== END PROGRESS DOCUMENT ===
+
+=== CURRENT TRACK FILE ===
+# Track
+Current slice details.
+=== END CURRENT TRACK FILE ===
+
+Task prompt:
+Produce or update the RFC draft for workflow 'demo'.
+Use the context block to anchor goals and prior decisions.
+If context conflicts with code, trust the current codebase and call out the conflict explicitly.
+Generate a complete Markdown RFC body for approval."
+`;
+
+exports[`DefaultPromptBuilder > builds stable composed prompt snapshot for slice-execution 1`] = `
+"System prompt:
+Role: Slice implementer.
+Objectives:
+- Implement only the active slice while preserving architecture boundaries.
+- Treat codebase state as source of truth for existing behavior.
+- Keep changes scoped to the current slice and DoD.
+Hard constraints:
+- Do NOT read other files in the tracks/ directory.
+- Previous tracks may contain stale context from earlier slices.
+- Trust PROGRESS.md for accumulated decisions and the codebase for current state.
+- Task cannot be considered done if project guardrails fail (i.e. lint, typecheck, build). Make sure you run the correct verification commands before marking the slice as done.
+
+Context block:
+Context Rules:
+- This block contains exactly three files: plan doc, PROGRESS.md, and current track file.
+- Do not read previous track files for historical context; use PROGRESS.md for accumulated decisions.
+
+=== PLAN DOCUMENT ===
+# Plan
+Example plan content.
+=== END PLAN DOCUMENT ===
+
+=== PROGRESS DOCUMENT ===
+# Progress
+Decision history.
+=== END PROGRESS DOCUMENT ===
+
+=== CURRENT TRACK FILE ===
+# Track
+Current slice details.
+=== END CURRENT TRACK FILE ===
+
+Task prompt:
+Implement Slice 02 - Data Layer.
+Execute the slice DoD completely before considering optional improvements.
+DoD for this slice:
+- Add repository abstraction
+- Update usage sites
+Update code and slice/progress documentation to reflect completed work."
+`;
+
+exports[`DefaultPromptBuilder > builds stable composed prompt snapshot for slice-fix 1`] = `
+"System prompt:
+Role: Targeted fixer for reviewer findings.
+Objectives:
+- Apply only accepted review findings while preserving already-correct behavior.
+- Keep fixes minimal and scoped to issues raised by review.
+- Use repository code as source of truth when findings conflict with stale assumptions.
+Output format:
+- Produce patch-level corrections and update relevant implementation notes.
+
+Context block:
+Context Rules:
+- This block contains exactly three files: plan doc, PROGRESS.md, and current track file.
+- Do not read previous track files for historical context; use PROGRESS.md for accumulated decisions.
+
+=== PLAN DOCUMENT ===
+# Plan
+Example plan content.
+=== END PLAN DOCUMENT ===
+
+=== PROGRESS DOCUMENT ===
+# Progress
+Decision history.
+=== END PROGRESS DOCUMENT ===
+
+=== CURRENT TRACK FILE ===
+# Track
+Current slice details.
+=== END CURRENT TRACK FILE ===
+
+Task prompt:
+Address the following review findings:
+
+1. [major] src/service.ts lines 12-18: Missing null guard (DoD: Service handles optional values)
+Null input can crash execution path.
+
+Do not perform unrelated refactors.
+
+Preserve behavior that already satisfies DoD.
+
+Summarize each fix mapped to a finding in your final response."
+`;
+
+exports[`DefaultPromptBuilder > builds stable composed prompt snapshot for slice-review 1`] = `
+"System prompt:
+Role: Adversarial slice reviewer.
+Objectives:
+- Evaluate only introduced changes against current slice DoD and locked constraints.
+- Do not report pre-existing defects unrelated to the introduced diff.
+- Keep review scoped to actionable issues.
+Severity model: critical, major, minor.
+Configured threshold for fix loops: major.
+Output format (strict JSON, no extra text):
+{
+  "verdict": "PASS" | "FAIL",
+  "confidence": number,
+  "summary": string,
+  "findings": [
+    {
+      "severity": "critical" | "major" | "minor",
+      "file": string,
+      "title": string,
+      "body": string,
+      "dodItem": string,
+      "lineRange": [number, number]
+    }
+  ]
+}
+
+Context block:
+Context Rules:
+- This block contains exactly three files: plan doc, PROGRESS.md, and current track file.
+- Do not read previous track files for historical context; use PROGRESS.md for accumulated decisions.
+
+=== PLAN DOCUMENT ===
+# Plan
+Example plan content.
+=== END PLAN DOCUMENT ===
+
+=== PROGRESS DOCUMENT ===
+# Progress
+Decision history.
+=== END PROGRESS DOCUMENT ===
+
+=== CURRENT TRACK FILE ===
+# Track
+Current slice details.
+=== END CURRENT TRACK FILE ===
+
+Task prompt:
+Review the current slice changes against DoD and architecture constraints.
+Only include findings introduced by this diff.
+Return PASS when no threshold-relevant issue exists.
+Return FAIL when one or more issues should block progression."
+`;

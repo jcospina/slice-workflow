@@ -1,4 +1,5 @@
 import type { ResolvedConfig } from "../../config/types";
+import type { BuiltPrompt, PromptBuildInput, PromptTemplatePhase } from "../../prompts/types";
 import type { AgentRuntime } from "../../runtime/types";
 import type { StateManager } from "../../state";
 import type { NotificationChannel, PhaseName, ResumeContext, WorkflowRun } from "../../state/types";
@@ -65,6 +66,9 @@ export interface MessagingManager {
 }
 
 export interface PromptBuilder {
+	/** Build all layers (system + context + task) and return a composed prompt. */
+	buildPrompt(phase: PromptTemplatePhase, input: PromptBuildInput): Promise<BuiltPrompt>;
+
 	/** Build the system prompt for a given phase. */
 	buildSystemPrompt(phase: PhaseName, ctx: PhaseContext): Promise<string>;
 
