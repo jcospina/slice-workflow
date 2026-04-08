@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_HOOK_TIMEOUT_MS } from "../hooks/types";
 import { DEFAULTS, loadGlobalConfig, loadProjectConfig, resolveConfig } from "./index";
 import type { GlobalConfig, ProjectConfig } from "./types";
 
@@ -111,6 +112,34 @@ describe("resolveConfig", () => {
 		expect(result.messaging.telegram).toBeUndefined();
 	});
 
+	it("resolves hooks to an empty array when omitted", () => {
+		const result = resolveConfig({}, {});
+		expect(result.hooks).toEqual([]);
+	});
+
+	it("merges hooks by appending project hooks after global hooks", () => {
+		const global: GlobalConfig = {
+			hooks: [
+				{ command: "global-complete", events: ["workflow:complete"] },
+				{ command: "global-failed", events: ["workflow:failed"], timeoutMs: 9_000 },
+			],
+		};
+		const project: ProjectConfig = {
+			hooks: [{ command: "project-failed", events: ["slice:failed"] }],
+		};
+
+		const result = resolveConfig(global, project);
+
+		expect(result.hooks.map((hook) => hook.command)).toEqual([
+			"global-complete",
+			"global-failed",
+			"project-failed",
+		]);
+		expect(result.hooks[0].timeoutMs).toBe(DEFAULT_HOOK_TIMEOUT_MS);
+		expect(result.hooks[1].timeoutMs).toBe(9_000);
+		expect(result.hooks[2].timeoutMs).toBe(DEFAULT_HOOK_TIMEOUT_MS);
+	});
+
 	it("applies project overrides for all scalar fields", () => {
 		const project: ProjectConfig = {
 			implementationsDir: "custom-dir",
@@ -188,6 +217,61 @@ describe("loadGlobalConfig", () => {
 		writeFileSync(configPath, JSON.stringify({ defaultProvider: "invalid" }));
 		expect(() => loadGlobalConfig(configPath)).toThrow("Invalid config");
 	});
+
+	it("throws when hooks include an unknown lifecycle event", () => {
+		const configPath = join(tmpDir, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				hooks: [{ command: "notify", events: ["workflow:unknown"] }],
+			}),
+		);
+		expect(() => loadGlobalConfig(configPath)).toThrow("Invalid config");
+	});
+
+	it("throws when hooks include an empty events array", () => {
+		const configPath = join(tmpDir, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				hooks: [{ command: "notify", events: [] }],
+			}),
+		);
+		expect(() => loadGlobalConfig(configPath)).toThrow("Invalid config");
+	});
+
+	it("throws when hook timeout is non-positive", () => {
+		const configPath = join(tmpDir, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				hooks: [{ command: "notify", events: ["workflow:failed"], timeoutMs: 0 }],
+			}),
+		);
+		expect(() => loadGlobalConfig(configPath)).toThrow("Invalid config");
+	});
+
+	it("throws when hook timeout is not an integer", () => {
+		const configPath = join(tmpDir, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				hooks: [{ command: "notify", events: ["workflow:failed"], timeoutMs: 1.5 }],
+			}),
+		);
+		expect(() => loadGlobalConfig(configPath)).toThrow("Invalid config");
+	});
+
+	it("throws when hook matcher is an invalid regex", () => {
+		const configPath = join(tmpDir, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				hooks: [{ command: "notify", events: ["workflow:failed"], matcher: "(" }],
+			}),
+		);
+		expect(() => loadGlobalConfig(configPath)).toThrow("Invalid config");
+	});
 });
 
 describe("loadProjectConfig", () => {
@@ -223,6 +307,26 @@ describe("loadProjectConfig", () => {
 
 	it("throws on invalid project config", () => {
 		writeFileSync(join(tmpDir, ".slicerc"), JSON.stringify({ sliceExecution: "parallel" }));
+		expect(() => loadProjectConfig(tmpDir)).toThrow("Invalid config");
+	});
+
+	it("throws when project hook command is missing", () => {
+		writeFileSync(
+			join(tmpDir, ".slicerc"),
+			JSON.stringify({
+				hooks: [{ events: ["workflow:complete"] }],
+			}),
+		);
+		expect(() => loadProjectConfig(tmpDir)).toThrow("Invalid config");
+	});
+
+	it("throws when project hook command is empty", () => {
+		writeFileSync(
+			join(tmpDir, ".slicerc"),
+			JSON.stringify({
+				hooks: [{ command: "  ", events: ["workflow:complete"] }],
+			}),
+		);
 		expect(() => loadProjectConfig(tmpDir)).toThrow("Invalid config");
 	});
 });

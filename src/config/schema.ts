@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_HOOK_TIMEOUT_MS, HOOK_EVENTS } from "../hooks/types";
 
 const providerEnum = z
 	.enum(["claude-code", "opencode"])
@@ -116,6 +117,60 @@ const reviewSchema = z.object({
 		),
 });
 
+const hookEventEnum = z
+	.enum(HOOK_EVENTS)
+	.describe("Lifecycle event that can trigger notification hooks");
+
+function isValidRegex(pattern: string): boolean {
+	try {
+		new RegExp(pattern);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+const hookMatcherSchema = z
+	.string()
+	.trim()
+	.min(1)
+	.refine(isValidRegex, "Matcher must be a valid regular expression")
+	.describe(
+		"Regex pattern tested against the serialized hook input JSON payload; if omitted, the hook matches all payloads for its events",
+	);
+
+const hookDefinitionSchema = z.object({
+	command: z
+		.string()
+		.trim()
+		.min(1)
+		.describe("Shell command to execute when a configured lifecycle event is emitted"),
+	events: z.array(hookEventEnum).min(1).describe("Lifecycle events that can trigger this hook"),
+	matcher: hookMatcherSchema.optional(),
+	timeoutMs: z
+		.number()
+		.int()
+		.positive()
+		.optional()
+		.describe("Per-hook command timeout in milliseconds (defaults to 5000ms when omitted)"),
+});
+
+const resolvedHookDefinitionSchema = z.object({
+	command: z
+		.string()
+		.trim()
+		.min(1)
+		.describe("Shell command to execute when a configured lifecycle event is emitted"),
+	events: z.array(hookEventEnum).min(1).describe("Lifecycle events that can trigger this hook"),
+	matcher: hookMatcherSchema.optional(),
+	timeoutMs: z
+		.number()
+		.int()
+		.positive()
+		.default(DEFAULT_HOOK_TIMEOUT_MS)
+		.describe("Resolved per-hook timeout in milliseconds (defaults to 5000ms)"),
+});
+
 export const globalConfigSchema = z
 	.object({
 		defaultProvider: providerEnum
@@ -125,6 +180,12 @@ export const globalConfigSchema = z
 		messaging: messagingSchema
 			.optional()
 			.describe("Global messaging tokens shared across all projects"),
+		hooks: z
+			.array(hookDefinitionSchema)
+			.optional()
+			.describe(
+				"Global lifecycle notification hooks. Project hooks append after these in deterministic order.",
+			),
 	})
 	.describe("User-level configuration stored at ~/.slice/config.json");
 
@@ -154,6 +215,12 @@ export const projectConfigSchema = z
 		messaging: messagingSchema
 			.optional()
 			.describe("Project-level messaging overrides (e.g. channel per project)"),
+		hooks: z
+			.array(hookDefinitionSchema)
+			.optional()
+			.describe(
+				"Project lifecycle notification hooks appended after global hooks in deterministic order.",
+			),
 	})
 	.describe("Project-level configuration stored at .slicerc in the project root");
 
@@ -202,6 +269,12 @@ export const resolvedConfigSchema = z
 			.default({})
 			.describe(
 				"Resolved messaging integrations (only includes platforms with complete credentials)",
+			),
+		hooks: z
+			.array(resolvedHookDefinitionSchema)
+			.default([])
+			.describe(
+				"Resolved lifecycle notification hooks. Merge order is deterministic: global hooks first, then project hooks.",
 			),
 		implementationsDir: z
 			.string()

@@ -3,14 +3,20 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { z } from "zod";
 import { ZodError } from "zod";
+import { DEFAULT_HOOK_TIMEOUT_MS } from "../hooks/types";
 import { globalConfigSchema, projectConfigSchema, resolvedConfigSchema } from "./schema";
 import type { GlobalConfig, ProjectConfig, ResolvedConfig } from "./types";
 
 export { globalConfigSchema, projectConfigSchema, resolvedConfigSchema } from "./schema";
 export type {
 	GlobalConfig,
+	HookDefinition,
+	HookEvent,
+	HookInput,
+	HookOutput,
 	ProjectConfig,
 	ResolvedConfig,
+	ResolvedHookDefinition,
 	ResolvedSlackConfig,
 	ResolvedTelegramConfig,
 	Provider,
@@ -63,11 +69,22 @@ export function resolveConfig(global: GlobalConfig, project: ProjectConfig): Res
 			opencode: { ...global.providers?.opencode, ...project.providers?.opencode },
 		},
 		messaging: resolveMessaging(global.messaging, project.messaging),
+		hooks: resolveHooks(global.hooks, project.hooks),
 		implementationsDir: project.implementationsDir,
 		approvalGates: project.approvalGates,
 		sliceExecution: project.sliceExecution,
 		review: project.review,
 	});
+}
+
+function resolveHooks(
+	global?: GlobalConfig["hooks"],
+	project?: ProjectConfig["hooks"],
+): ResolvedConfig["hooks"] {
+	return [...(global ?? []), ...(project ?? [])].map((hook) => ({
+		...hook,
+		timeoutMs: hook.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS,
+	}));
 }
 
 function resolveMessaging(
