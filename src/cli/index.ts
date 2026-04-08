@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { VERSION } from "../index";
 import { registerDraftPolishCommand } from "./commands/draft-polish";
+import { registerPlanCommand } from "./commands/plan";
 import { registerResumeCommand } from "./commands/resume";
 import { registerRfcDraftCommand } from "./commands/rfc-draft";
 import { registerSetupGithubCommand } from "./commands/setup-github";
@@ -30,6 +31,7 @@ export function createProgram(): Command {
 	registerResumeCommand(program);
 	registerRfcDraftCommand(program);
 	registerDraftPolishCommand(program);
+	registerPlanCommand(program);
 	registerSetupGithubCommand(program);
 
 	program.showHelpAfterError(true);

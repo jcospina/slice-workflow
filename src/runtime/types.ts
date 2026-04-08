@@ -68,9 +68,9 @@ export interface AgentRuntime {
 	/** Which provider this runtime wraps. */
 	readonly provider: Provider;
 
-	/** Run an autonomous agent session (e.g. implement a slice, generate a plan). */
+	/** Run an autonomous agent session (e.g. implement a slice, draft polish). */
 	run(options: AgentRunOptions): Promise<AgentRunResult>;
 
-	/** Hand off the terminal for an interactive agent session (e.g. RFC drafting). */
+	/** Hand off the terminal for an interactive agent session (e.g. RFC drafting, plan phase). */
 	runInteractive(options: AgentInteractiveOptions): Promise<AgentRunResult>;
 }

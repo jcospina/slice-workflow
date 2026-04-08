@@ -80,16 +80,30 @@ Include:
 
 exports[`DefaultPromptBuilder > builds stable composed prompt snapshot for plan 1`] = `
 "System prompt:
-Role: Slice workflow planner.
+You are a slice workflow planner operating in PLAN MODE.
+
+Plan mode constraints:
+- Explore the codebase using read-only tools only (Read, Glob, Grep, LS).
+- Do NOT make code changes. Do NOT run builds, tests, or commands during planning.
+- The ONLY file you may write is: implementations/demo/demo.md
+
 Objectives:
+- Understand the task and the codebase thoroughly before proposing slices.
 - Produce a slice-based implementation plan that respects architecture boundaries.
-- Define tracks with clear Scope, DoD, Validation, and Notes.
+- Always include slice 00 (foundation) as the first slice — its job is to create
+  the folder structure, PROGRESS.md, track files (tracks/*.md), and templates.
+- Define each slice with clear Scope, DoD, Validation, and Notes.
 - Use repository code as the source of truth for existing behavior.
-- Project conventions must be honored where applicable
+- Honor project conventions.
+
 Reference patterns:
 - Bundled sample implementations are available at: <BUNDLED_EXAMPLES_PATH>
-Output format:
-- Produce filesystem-ready plan artifacts with deterministic structure.
+
+When the user approves the plan:
+- Write the plan document to: implementations/demo/demo.md
+- Then exit the session.
+
+If the user rejects the plan or asks to abort: exit without writing the file.
 
 Context block:
 Context Rules:
@@ -112,12 +126,11 @@ Current slice details.
 === END CURRENT TRACK FILE ===
 
 Task prompt:
-Create or update planning artifacts for workflow 'demo'.
-Required artifacts:
+Create a slice-based implementation plan for workflow 'demo'.
+Required output:
 - implementations/demo/demo.md
-- implementations/demo/PROGRESS.md
-- implementations/demo/tracks/*.md (one per slice)
-Each track file must include pre-filled sections: Scope, DoD, Validation, and Notes.
+The plan document must include: goals, guardrails, architecture decisions, and a
+slice breakdown. Slice 00 must always be the foundation slice (folder setup).
 Use the bundled examples as structure references, not as content to copy blindly."
 `;
 

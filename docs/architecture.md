@@ -328,8 +328,8 @@ Behavioral rule: first valid response wins when multiple channels respond.
 
 `AgentRuntime` is the key boundary that prevents orchestrator lock-in to one agent provider.
 
-- `run(...)` for autonomous phases
-- `runInteractive(...)` for RFC-style conversational phase
+- `run(...)` for autonomous phases (e.g. Draft Polish, slice execution)
+- `runInteractive(...)` for interactive conversational phases (RFC Draft and Plan)
 - standard result contract including success, output, session ID, cost, and duration
 
 This allows the same orchestration and persistence logic to run with Claude Code or OpenCode.
