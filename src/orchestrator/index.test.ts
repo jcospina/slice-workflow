@@ -175,10 +175,11 @@ describe("WorkflowOrchestrator constructor", () => {
 			projectCwd: "/project",
 			phases: {
 				"rfc-draft": makeHandler(),
+				"draft-polish": makeHandler(),
 			},
 		});
 
-		// draft-polish remains unimplemented in defaults.
+		// plan remains unimplemented in defaults.
 		await expect(orch.run("test task")).rejects.toThrow(PhaseError);
 		await expect(orch.run("test task")).rejects.toThrow("not yet implemented");
 
