@@ -1,7 +1,9 @@
+import type { ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./runner";
 import type { HookInput, ResolvedHookDefinition } from "./types";
 
@@ -85,21 +87,23 @@ describe("HookRunner", () => {
 	});
 
 	it("enforces timeout and kills long-running hook commands", async () => {
-		const script = await createScript(tempDirs, "never-exits.js", [
-			"setInterval(() => {}, 1_000);",
-		]);
+		const child = createTimeoutChildProcess();
+		const spawnImpl = vi.fn(() => child) as unknown as typeof spawn;
 
 		const runner = createHookRunner({
-			hooks: [makeHook(nodeCommand(script), "phase:failed", undefined, 40)],
+			hooks: [makeHook("fake-timeout-command", "phase:failed", undefined, 10)],
 			cwd: process.cwd(),
+			spawnImpl,
 		});
 		const result = await runner.run(makeInput({ event: "phase:failed" }));
 
+		expect(spawnImpl).toHaveBeenCalledTimes(1);
+		expect(child.kill).toHaveBeenCalledWith("SIGTERM");
 		expect(result.continue).toBe(true);
 		expect(result.executions[0]?.success).toBe(false);
 		expect(result.executions[0]?.timedOut).toBe(true);
 		expect(result.executions[0]?.error).toContain("timed out");
-	});
+	}, 1_000);
 
 	it("treats non-zero exit codes as non-blocking failures", async () => {
 		const script = await createScript(tempDirs, "exit-non-zero.js", [
@@ -158,4 +162,30 @@ async function createScript(
 	const scriptPath = join(dir, fileName);
 	await writeFile(scriptPath, lines.join("\n"), "utf8");
 	return scriptPath;
+}
+
+function createTimeoutChildProcess(): ChildProcess {
+	const child = new EventEmitter() as ChildProcess;
+	child.stdout = new EventEmitter() as ChildProcess["stdout"];
+	child.stderr = new EventEmitter() as ChildProcess["stderr"];
+	let isKilled = false;
+
+	const stdin = new EventEmitter() as ChildProcess["stdin"];
+	if (stdin) {
+		(stdin as ChildProcess["stdin"] & { end: (chunk?: string) => void }).end = vi.fn();
+	}
+	child.stdin = stdin;
+
+	Object.defineProperty(child, "killed", {
+		get: () => isKilled,
+	});
+	child.kill = vi.fn((signal?: NodeJS.Signals) => {
+		isKilled = true;
+		setTimeout(() => {
+			child.emit("close", null, signal ?? "SIGTERM");
+		}, 0);
+		return true;
+	});
+
+	return child;
 }
