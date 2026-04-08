@@ -65,6 +65,7 @@ const BASE_CONFIG = {
 	provider: "claude-code" as const,
 	providers: { claudeCode: {}, opencode: {} },
 	messaging: {},
+	hooks: [],
 	implementationsDir: "implementations",
 	approvalGates: { rfc: false, plan: false },
 	sliceExecution: "autonomous" as const,
