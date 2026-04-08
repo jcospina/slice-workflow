@@ -18,7 +18,7 @@ TUI Flow:
     +-- Phase 1: RFC Draft (interactive agent conversation)
     +-- Approval Gate (user reviews RFC via Slack/Telegram or TUI)
     +-- Phase 2: Draft Polish (autonomous agent refines RFC)
-    +-- Phase 3: Plan (autonomous agent creates slices, tracks, templates)
+    +-- Phase 3: Plan (interactive agent creates slices, tracks, templates; user refines until approved)
     +-- Approval Gate (user reviews plan via Slack/Telegram or TUI)
     +-- Phase 4: Execute Slices (sequential agents, each in own worktree)
     |       +-- On merge conflict / error -> Slack/Telegram notification + pause
@@ -616,7 +616,7 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 - Prompt builder and template system
 - RFC Draft phase (interactive spawn)
 - Draft Polish phase (autonomous refinement)
-- Plan phase (autonomous, validate output structure against track file schema)
+- Plan phase (interactive, user refines until approved; validate output structure against track file schema)
 
 ### Phase D: Messaging Integration
 

@@ -5,6 +5,7 @@ import type { StateManager } from "../state";
 import type { PhaseName, ResumeContext, WorkflowRun } from "../state/types";
 import { PhaseError, StateError } from "../utils/errors";
 import { runDraftPolishPhase } from "./phases/draft-polish";
+import { runPlanPhase } from "./phases/plan";
 import { runRfcDraftPhase } from "./phases/rfc-draft";
 import type {
 	ApprovalDecision,
@@ -73,7 +74,7 @@ function makeStub(phase: PhaseName): PhaseHandler {
 const PHASE_STUBS: Record<PhaseName, PhaseHandler> = {
 	"rfc-draft": runRfcDraftPhase,
 	"draft-polish": runDraftPolishPhase,
-	plan: makeStub("plan"),
+	plan: runPlanPhase,
 	execute: makeStub("execute"),
 	handoff: makeStub("handoff"),
 };
