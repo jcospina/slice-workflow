@@ -4,6 +4,8 @@
 
 This document explains how `slice` works as an integrated architecture, with focus on runtime behavior, state management, and component wiring.
 
+Status update (April 8, 2026): notifications are being migrated from hardcoded Slack/Telegram fan-out to lifecycle hooks. Approval gating remains separate and channel-agnostic.
+
 ## System at a glance
 
 `slice` is a local orchestration system that coordinates AI agents to move a task from idea to PR through deterministic phases.
@@ -22,7 +24,7 @@ flowchart LR
     ORCH --> PM[Prompt Builder]
     ORCH --> RTF[Runtime Factory]
     ORCH --> WTM[Worktree Manager]
-    ORCH --> MSG[Messaging Manager]
+    ORCH --> AGW[Approval Gateway]
     ORCH --> GH[GitHub Resume Integration]
 
     SM --> STM[State Manager]
@@ -39,10 +41,9 @@ flowchart LR
     WTM --> WT[Isolated Worktree]
     AGENT --> WT
 
-    MSG --> SLACK[Slack]
-    MSG --> TG[Telegram]
     ORCH --> HK[Hook Runner]
     HK --> HOOKS[User-defined shell hooks]
+    HK --> ADPT[Channel adapters e.g. Slack or Telegram]
 ```
 
 ## Architectural model: two data planes and one control plane
@@ -67,7 +68,7 @@ This plane exists for orchestration integrity:
 
 - Current and historical workflow execution status
 - Phase/slice/review progress and costs
-- Notification and approval outcomes
+- Hook notification executions and approval outcomes
 - Crash-safe checkpoints for resume
 
 This state is local runtime metadata and is gitignored.
@@ -231,7 +232,8 @@ sequenceDiagram
     participant W as WorktreeManager
     participant R as AgentRuntime
     participant V as ReviewerRuntime
-    participant M as Messaging
+    participant N as Notification Hooks
+    participant A as Approval Gateway
 
     O->>S: mark slice running
     O->>W: create worktree
@@ -250,14 +252,14 @@ sequenceDiagram
       O->>V: re-review until pass or max iterations
       alt max iterations reached
         O->>S: mark escalated or failed
-        O->>M: notify human intervention required
+        O->>N: emit review escalation event
       end
     end
 
     alt gated mode
       O->>S: mark awaiting_approval
-      O->>M: send approval request
-      M-->>O: approve or changes or reject
+      O->>A: request approval
+      A-->>O: approve or changes or reject
       O->>S: persist approval response
     end
 
@@ -298,26 +300,32 @@ Key behavior constraints:
 | SliceExecutionContext (`src/runtime/slice-context.ts`) | Read/write contract for each slice agent | Plan doc, PROGRESS.md, track doc, cost | Read-only contract; worktreePath is the only writable root |
 | WorktreeManager (`src/orchestrator/worktree.ts`) | Worktree create/setup/cleanup and isolation | Repo git state | Worktree filesystem |
 | Prompt builder (`src/prompts`) | Deterministic prompt composition | Plan doc, PROGRESS.md, current track | Prompt strings |
-| MessagingManager (`src/messaging`) | Channel fan-out, approvals, notifications | Event payloads | Sent message records and user responses |
+| Approval gateway (`src/cli/ui/approval-gate.ts`) | Collect approval decisions (TUI or adapter-backed channel), return `ApprovalResult` | Approval request payload | Approval decision persisted to state |
 | Hook runner (`src/hooks/runner.ts`) | Fire user-defined shell commands at lifecycle events | HookDefinitions from config | stdout responses; can signal abort |
 | DiagnosticTracker (`src/diagnostics/tracker.ts`) | Capture tsc/lint/test baselines and compute post-slice delta | Worktree output | DiagnosticDelta for reviewer prompt |
 | GitHub resume integration (`src/github`) | Resume context from PR review feedback | PR comments and diff context | Resume invocation context |
 
 ## Approval and notification wiring
 
-The approval flow is channel-agnostic. Slack, Telegram, and TUI produce the same `ApprovalResult` contract.
+Notification delivery is hook-first. Approval remains a separate contract that can use TUI-only or adapter-backed channels.
 
 ```mermaid
 flowchart LR
-    O[Orchestrator hits approval gate] --> MM[MessagingManager]
-    MM --> S[Slack Channel]
-    MM --> T[Telegram Channel]
-    MM --> UI[TUI Fallback]
+    O[Orchestrator lifecycle event] --> HK[Hook Runner]
+    HK --> H1[Command Hook A]
+    HK --> H2[Command Hook B]
+    H1 --> EXT1[Slack or Telegram adapter]
+    H2 --> EXT2[Webhook or custom script]
+    O --> DB[(SQLite state update)]
+```
 
-    S --> AR[ApprovalResult]
-    T --> AR
-    UI --> AR
-
+```mermaid
+flowchart LR
+    O[Orchestrator hits approval gate] --> AG[Approval Gateway]
+    AG --> UI[TUI]
+    AG --> CA[Optional channel adapter]
+    UI --> AR[ApprovalResult]
+    CA --> AR
     AR --> O
     O --> DB[(SQLite state update)]
 ```

@@ -16,14 +16,14 @@ TUI Flow:
     |
     +-- User writes initial prompt in a comfortable editor view
     +-- Phase 1: RFC Draft (interactive agent conversation)
-    +-- Approval Gate (user reviews RFC via Slack/Telegram or TUI)
+    +-- Approval Gate (user reviews RFC via approval gateway: TUI and/or adapter channel)
     +-- Phase 2: Draft Polish (autonomous agent refines RFC)
     +-- Phase 3: Plan (interactive agent creates slices, tracks, templates; user refines until approved)
-    +-- Approval Gate (user reviews plan via Slack/Telegram or TUI)
+    +-- Approval Gate (user reviews plan via approval gateway: TUI and/or adapter channel)
     +-- Phase 4: Execute Slices (sequential agents, each in own worktree)
-    |       +-- On merge conflict / error -> Slack/Telegram notification + pause
+    |       +-- On merge conflict / error -> lifecycle hook notification + pause
     +-- Phase 5: Handoff (PR created with implementation notes)
-    |       +-- Slack/Telegram notification: PR ready for review
+    |       +-- lifecycle hook notification: PR ready for review
     +-- Progress tracked in TUI throughout (current phase, slice, cost)
 ```
 
@@ -45,8 +45,8 @@ TUI Flow:
 | Agent isolation | Git worktrees (orchestrator-managed) | Safety mechanism: each agent works in a worktree so destructive operations never touch the main working copy |
 | Post-slice review | Evaluator-optimizer loop | Separate reviewer agent checks changes against DoD, implementer fixes findings. Max iterations configurable |
 | Framework | Custom orchestration | Existing agent SDKs are meant for API-calling agents, not subprocess-based coding agents. |
-| Approval gates | Slack/Telegram interactive + TUI fallback | User can approve/reject/request changes from Slack, Telegram (async, mobile) or TUI (sync). No server deployment needed |
-| Notifications | Slack (Socket Mode) + Telegram (polling) | Bidirectional bots: send rich messages with buttons, receive responses. Both work locally without public URL |
+| Approval gates | Approval gateway + TUI fallback | Unified `ApprovalResult`; channel adapters are optional and can be swapped without orchestrator changes |
+| Notifications | Lifecycle hook runner (`hooks[]`) | Extensible command hooks (Slack/Telegram/Discord/webhooks/custom scripts) without hardcoding channels in core |
 | PR feedback | GitHub Action on "Changes Requested" -> posts `slice resume --pr N` | Automated trigger, manual execution |
 | RFC phase | Interactive terminal (spawn `claude` or `opencode` with `stdio: inherit`) | Full agent UX for conversations |
 | Config | `.slicerc` (project) + `~/.slice/config.json` (global) | Per-project customization |
@@ -89,7 +89,7 @@ slice/
 |   |   |   +-- components/             # Reusable Ink components
 |   |   +-- ui/
 |   |       +-- terminal.ts             # Colors, spinners, formatting (shared utils)
-|   |       +-- approval-gate.ts        # Approve/feedback/reject (TUI + messaging fallback)
+|   |       +-- approval-gate.ts        # Approve/feedback/reject (TUI + optional adapter channel)
 |   |
 |   +-- config/
 |   |   +-- index.ts                    # Load & merge global + project config
@@ -136,17 +136,7 @@ slice/
 |   |   +-- migrations.ts            # DB schema migrations
 |   |   +-- types.ts                 # WorkflowRun, PhaseRecord, SliceRecord
 |   |
-|   +-- messaging/
-|   |   +-- index.ts                 # MessagingManager -- dispatches to configured channels
-|   |   +-- types.ts                # MessagingConfig, ApprovalResult, NotificationEvent
-|   |   +-- slack/
-|   |   |   +-- index.ts            # SlackBot -- Bolt app with Socket Mode
-|   |   |   +-- approval.ts         # Slack interactive approvals (buttons + modals)
-|   |   |   +-- notifications.ts    # Slack notification formatting
-|   |   +-- telegram/
-|   |       +-- index.ts            # TelegramBot -- polling mode
-|   |       +-- approval.ts         # Telegram interactive approvals (inline keyboards)
-|   |       +-- notifications.ts    # Telegram notification formatting
+|   +-- messaging/                   # Legacy approval path during migration to hook-first notifications
 |   |
 |   +-- github/
 |   |   +-- action.ts                # GitHub Action YAML generator
@@ -418,7 +408,7 @@ The default `slice` command (no arguments) opens a terminal UI built with **Ink*
 
 - **Prompt writing** -- A comfortable editor view for writing the initial task description (not cramped into a CLI arg). Supports multi-line editing via `ink-text-input`.
 - **Progress tracking** -- Live view of: current phase, current slice, elapsed time, cost so far. Updated in real-time via React state. Agent output streamed using Ink's `<Static>` component (renders permanently above the interactive UI, avoids re-render thrashing).
-- **Local approvals** -- When an approval gate is reached and messaging is not configured, the TUI shows the artifact and approval controls inline via `ink-select-input`.
+- **Local approvals** -- When an approval gate is reached and no external adapter channel is configured, the TUI shows the artifact and approval controls inline via `ink-select-input`.
 - **Workflow status** -- Overview of all active/completed workflows.
 
 The TUI delegates to Claude Code / OpenCode for agent interactions (those tools have their own UIs). The TUI is the orchestration dashboard, not an agent interface.
@@ -434,51 +424,35 @@ The TUI delegates to Claude Code / OpenCode for agent interactions (those tools 
 
 **Constraints:** Node >= 22, React >= 19, no native scrolling (manual or community package), Flexbox-only layout (no CSS Grid).
 
-### Messaging Integration (Slack + Telegram)
+### Hook-based Notification Integration
 
-The tool supports two messaging platforms for fully async, bidirectional communication. Both work locally without a public URL.
+Status (April 8, 2026): Phase D has been refocused to a hook-first notification architecture. The legacy hardcoded Slack/Telegram notification path is being replaced.
 
-**Slack (Socket Mode):**
-- Uses `@slack/bolt` with Socket Mode -- WebSocket connection, no public URL
-- Requirements: Slack App with Socket Mode enabled, App-level token (`xapp-...`), Bot token (`xoxb-...`)
-- Rich messages via Block Kit: buttons, modals for feedback
-- Message limit: 3000 chars per block, long content uploaded as file attachment
+**Core model:**
+- Orchestrator emits lifecycle events to `src/hooks/runner.ts`.
+- Hooks are configured in global and project config (`hooks[]`), merged deterministically (project appends to global).
+- Each hook receives JSON payload on stdin and can return structured JSON on stdout.
+- Failures are non-blocking by default for notifications, with execution logged for auditability.
 
-**Telegram (Polling):**
-- Uses `telegraf` or `node-telegram-bot-api` with long polling -- no webhook, no public URL
-- Requirements: Bot token from @BotFather, chat ID for the target conversation
-- Interactive via inline keyboards: Approve/Request Changes/Reject buttons
-- On "Request Changes": bot asks for feedback in a reply
-- Message limit: 4096 chars per message, long content sent as document attachment
+**Lifecycle events (planned contract):**
+- `workflow:start`, `workflow:complete`, `workflow:failed`
+- `phase:start`, `phase:complete`, `phase:failed`
+- `slice:start`, `slice:complete`, `slice:failed`
+- `review:start`, `review:verdict`
+- `approval:requested`, `approval:received`
 
-**Abstraction:** Both platforms implement a `MessagingChannel` interface. The `MessagingManager` dispatches events to all configured channels. Either, both, or neither can be configured.
+**Channel integrations:**
+- Slack/Telegram are adapter commands invoked by hooks, not hardcoded orchestrator channels.
+- The same model supports Discord, email, generic webhooks, or custom scripts without core changes.
 
-**Interactive approval flow:**
-1. Orchestrator reaches an approval gate (RFC ready, Plan ready)
-2. MessagingManager sends to all configured channels:
-   - Plan/RFC content (formatted per platform)
-   - Three buttons: Approve, Request Changes, Reject
-3. User taps a button from their phone/desktop (Slack or Telegram)
-4. If "Request Changes": user provides feedback (Slack modal or Telegram reply)
-5. Response flows back to the running CLI
-6. Orchestrator continues (re-runs phase with feedback, or proceeds)
-7. First response wins -- if user responds on both Slack and Telegram, the first one is used
-
-**Notification events:**
-- `approval_gate_reached` -- RFC or Plan ready, buttons for approve/reject/changes
-- `slice_completed` -- Slice N finished, includes cost and duration (informational in autonomous mode)
-- `slice_approval_requested` -- Slice N done, awaiting approval to proceed (gated mode only). Buttons: Approve / Request Changes / Reject
-- `slice_failed` -- Slice N failed, includes error and a "Retry" button
-- `review_max_iterations` -- Review loop exhausted max iterations, escalate to human with remaining findings
-- `merge_conflict` -- Conflict details, files list, "I've resolved it" button
-- `workflow_completed` -- PR link, total cost, total duration
-- `workflow_error` -- Error details
+**Approval behavior:**
+- Approval remains channel-agnostic and returns one `ApprovalResult` contract.
+- TUI remains the default fallback path.
+- Optional adapter-backed channels may be used; first valid response wins.
 
 **Slice execution modes:**
-- `"autonomous"` (default): All slices run start-to-end. `slice_completed` sent as informational notification.
-- `"gated"`: After each slice, `slice_approval_requested` sent with interactive buttons. Orchestrator pauses until user approves, requests changes, or rejects. On crash during wait, SQLite records `awaiting_approval` state for resumability.
-
-**TUI fallback:** If no messaging platform is configured, approval gates and notifications are handled in the TUI. All paths return the same `ApprovalResult` type.
+- `"autonomous"` (default): slices run start-to-end; lifecycle notifications are emitted as hook events.
+- `"gated"`: after each slice, orchestrator pauses for approval; on crash during wait, SQLite preserves `awaiting_approval` state for resume.
 
 ### GitHub Action Flow
 
@@ -528,17 +502,16 @@ The DB file is gitignored. It's machine-local state, not project documentation.
       "model": "anthropic/claude-sonnet-4-20250514"
     }
   },
-  "messaging": {
-    "slack": {
-      "appToken": "xapp-1-...",
-      "botToken": "xoxb-...",
-      "defaultChannel": "#slice-notifications"
+  "hooks": [
+    {
+      "command": "node ./scripts/notify-slack.js",
+      "events": ["workflow:complete", "workflow:failed"]
     },
-    "telegram": {
-      "botToken": "123456:ABC-DEF...",
-      "chatId": "-1001234567890"
+    {
+      "command": "node ./scripts/notify-telegram.js",
+      "events": ["slice:failed", "review:verdict"]
     }
-  }
+  ]
 }
 ```
 
@@ -565,10 +538,12 @@ The DB file is gitignored. It's machine-local state, not project documentation.
     "baseDelayMs": 2000,
     "maxDelayMs": 60000
   },
-  "hooks": [],
-  "messaging": {
-    "slack": { "channel": "#my-project-ci" }
-  }
+  "hooks": [
+    {
+      "command": "linear-update --from-stdin",
+      "events": ["workflow:complete", "workflow:failed"]
+    }
+  ]
 }
 ```
 
@@ -618,13 +593,13 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 - Draft Polish phase (autonomous refinement)
 - Plan phase (interactive, user refines until approved; validate output structure against track file schema)
 
-### Phase D: Messaging Integration
+### Phase D: Hook-Based Notifications
 
-- MessagingManager abstraction and MessagingChannel interface
-- Slack bot: Bolt app with Socket Mode, Block Kit approvals, notification formatting
-- Telegram bot: polling mode, inline keyboard approvals, notification formatting
-- Approval gate: messaging (Slack/Telegram) + TUI fallback
-- Wire into orchestrator approval gates
+- Hook event model and config merge semantics (`global hooks + project hooks`)
+- Hook runner: matcher routing, JSON stdin/stdout protocol, timeout and failure handling
+- Async hook registry for long-running adapters
+- Wire lifecycle hook emission into orchestrator transitions
+- Slack/Telegram migration via hook adapters + docs and test matrix
 
 ### Phase E: Execution & Handoff
 
@@ -635,9 +610,9 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 - Adversarial reviewer prompt (PARTIAL verdict, anti-rationalization preamble, strategy matrix by change type, read-only /tmp constraint)
 - `SliceExecutionContext` typed contract: build read-only context before each slice, inject write-boundary instructions into system prompt
 - Diagnostic baseline/delta: capture tsc error count + lint issues + test pass rate before/after each slice; include delta in reviewer prompt
-- Slice execution modes: autonomous (continue immediately) vs gated (pause for approval via messaging/TUI)
+- Slice execution modes: autonomous (continue immediately) vs gated (pause for approval via gateway/TUI)
 - Error handling: `RetryableError` + `BudgetExhaustedError` subclasses, `categorizeError()`, `withRetry()` wrapping slice execution
-- Handoff phase (agent creates PR via `gh pr create`) + messaging notification with PR URL
+- Handoff phase (agent creates PR via `gh pr create`) + hook notification with PR URL
 
 ### Phase F: Resume & GitHub Action
 
@@ -645,7 +620,6 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 - GitHub Action template and `slice setup-github` command
 - `slice status` -- read SQLite state, display progress table (include turns used/max for running slices)
 - `slice config` -- interactive config management
-- Hook system: `src/hooks/types.ts` + `src/hooks/runner.ts`, config schema extension, emit hooks from orchestrator at every state transition
 - Session/CLI config overrides: `--provider`, `--model`, `--max-budget`, `--slice-execution`, `--no-review`, `--config` flags; resolve as in-memory session layer above project config
 
 ## Dependencies
@@ -664,9 +638,11 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 | `ink-select-input` | Arrow-key selectable lists for approval gates, menus |
 | `ink-spinner` | Animated spinners for autonomous phase progress |
 | `chalk` | Terminal colors -- used by Ink's `<Text>` component for styling |
-| `@slack/bolt` | Slack Bolt framework -- handles Socket Mode WebSocket connection, interactive messages (buttons, modals), and event handling. No public URL needed |
-| `telegraf` | Telegram Bot framework -- handles long polling, inline keyboards for approvals, message formatting. No webhook needed |
 | `nanoid` | ID generation -- creates compact, URL-safe unique IDs for workflow runs, phase records, and slice records |
+
+Optional channel adapter dependencies (project-specific, not core):
+- `@slack/bolt` for a Slack adapter hook implementation
+- `telegraf` for a Telegram adapter hook implementation
 
 ### Development
 
@@ -684,10 +660,10 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 
 ## Verification
 
-1. **Unit tests**: Runtime (mocked CLI/subprocess behavior), config loader, SQLite state store, worktree manager, prompt builder, messaging formatters, review loop (structured output parsing, early break, max iterations)
+1. **Unit tests**: Runtime (mocked CLI/subprocess behavior), config loader, SQLite state store, worktree manager, prompt builder, hook runner (matching/timeouts/parse failures), review loop (structured output parsing, early break, max iterations)
 2. **Integration test**: Full workflow on a test repo -- creates RFC, plan, executes slice 0, creates PR
 3. **Manual test**: Run against a real project with Claude Code, verify generated artifacts match decouple-data-layer/income-tracking structure
-4. **Messaging test**: Verify interactive approval flow on both Slack and Telegram -- send plan, click approve/reject, receive response in CLI
+4. **Hook integration test**: Verify lifecycle events trigger configured hooks and adapter scripts receive expected JSON payloads
 5. **Resume test**: Create a PR, submit "Changes Requested" review, run `slice resume`, verify agent receives review context
 6. **TUI test**: Verify prompt editor, progress view, and local approval gates render and function correctly
 
@@ -698,11 +674,11 @@ The DB file is gitignored. It's machine-local state, not project documentation.
 | Agent produces plan in unexpected format | Validate structure post-plan (check track file sections), retry with specific feedback |
 | Context window overflow on large slices | Plan prompt enforces 50% max fill, monitor via available CLI usage data when exposed; otherwise rely on duration/log output |
 | `claude` or `opencode` CLI not installed | Check at startup, provide installation URL, suggest the other runtime as fallback |
-| Slack/Telegram setup complexity | Provide `slice config` wizard that walks through bot creation, token setup for each platform. Document with screenshots |
+| Hook command setup complexity | Provide `slice config` wizard and copy-paste adapter templates (Slack/Telegram/webhook) with documented payload schema |
 | `gh` CLI not installed | Agents need `gh` for PR creation and resume. Check before handoff/resume phases, provide installation guidance |
 | SQLite native dependency on npm install | `better-sqlite3` ships prebuilt binaries for all major platforms; fallback to build from source |
 | Process crash mid-workflow | SQLite state survives crash, `slice status` shows where it stopped, `slice continue` resumes from last checkpoint |
-| Message too long for plan content | Slack: split into blocks (max 3000 chars), upload as file > 10KB. Telegram: split into messages (max 4096 chars), send as document > 10KB |
+| Notification payload too large for destination channel | Adapter layer handles truncation/chunking and uses file/document upload fallback when required by destination limits |
 | Agent performs destructive operations | Worktree isolation contains blast radius -- main working copy is never touched |
 | Review loop goes infinite | Hard cap via `review.maxIterations` (default 2). Only `critical`/`major` findings trigger fix iterations. Escalate to human on exhaustion |
 | Worktree dependency setup slow | Use APFS copy-on-write clone (`cp -c`) for `node_modules` on macOS for near-instant duplication |

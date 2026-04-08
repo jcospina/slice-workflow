@@ -41,9 +41,11 @@ Each slice is small enough to fit within ~50% of an agent's context window, incl
 | TUI | Ink (React for CLI) | Component model, streaming output via `<Static>`, first-class TypeScript |
 | Machine state | SQLite (`better-sqlite3`) | Atomic writes, queryable, crash-resilient, supports resumability |
 | Human state | Filesystem (PROGRESS.md, tracks/) | Human-readable, agent-writable, git-trackable |
-| Notifications | Slack (Socket Mode) + Telegram (polling) | Bidirectional, no public URL needed, mobile-friendly approvals |
+| Notifications | Lifecycle hooks (`hooks[]`) | Extensible command hooks; channel adapters can be added without orchestrator changes |
 | Agent isolation | Git worktrees | Blast radius containment — agents never touch the main working copy |
 | Post-slice review | Evaluator-optimizer loop | Reviewer agent checks changes against DoD, implementer fixes findings |
+
+Status update (April 8, 2026): notification delivery is being migrated to hook-first architecture. Legacy built-in Slack/Telegram notification paths are being replaced with hook adapters.
 
 ### Provider abstraction
 
@@ -58,16 +60,15 @@ For the `opencode` runtime, `slice` uses an SDK-first autonomous path (`@opencod
 
 ### Approval gates
 
-Users can approve, reject, or request changes on RFCs and plans from:
+Approvals are channel-agnostic and return one `ApprovalResult` contract. Depending on your setup, they can come from:
 
-- **Slack** — Interactive buttons and modals via Socket Mode
-- **Telegram** — Inline keyboards via long polling
-- **TUI** — Local fallback when no messaging is configured
+- **TUI** — Local fallback / default path
+- **Channel adapter** — Optional external integration wired via hooks
 
 ### Slice execution modes
 
-- **Autonomous** (default) — All slices run start-to-end, notifications are informational
-- **Gated** — Orchestrator pauses after each slice, waits for user approval via messaging or TUI
+- **Autonomous** (default) — All slices run start-to-end, lifecycle notifications are emitted via hooks
+- **Gated** — Orchestrator pauses after each slice, waits for user approval via approval gateway (TUI and/or adapter)
 
 ## Configuration
 
@@ -76,10 +77,10 @@ Users can approve, reject, or request changes on RFCs and plans from:
 ```json
 {
   "defaultProvider": "claude-code",
-  "messaging": {
-    "slack": { "appToken": "xapp-...", "botToken": "xoxb-...", "defaultChannel": "#slice-notifications" },
-    "telegram": { "botToken": "123456:ABC-DEF...", "chatId": "-1001234567890" }
-  }
+  "hooks": [
+    { "command": "node ./scripts/notify-slack.js", "events": ["workflow:complete", "workflow:failed"] },
+    { "command": "node ./scripts/notify-telegram.js", "events": ["slice:failed"] }
+  ]
 }
 ```
 
