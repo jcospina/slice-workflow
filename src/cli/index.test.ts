@@ -30,6 +30,13 @@ describe("createProgram", () => {
 		expect(setupGithub.description()).toBe("Install the Slice GitHub Action in your repository");
 	});
 
+	it("registers the draft-polish command", () => {
+		const draftPolish = findCommand("draft-polish");
+		expect(draftPolish.description()).toBe(
+			"Run the autonomous draft-polish phase for an RFC draft file",
+		);
+	});
+
 	it("sets name and version", () => {
 		const program = createProgram();
 		expect(program.name()).toBe("slice");

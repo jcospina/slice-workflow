@@ -82,9 +82,7 @@ export function buildClaudeArgs(
 		args.push("--max-turns", String(options.maxTurns));
 	}
 
-	const allowedTools = options.allowedTools
-		?.map((tool) => tool.trim())
-		.filter((tool) => tool.length > 0);
+	const allowedTools = normalizeAllowedTools(options.allowedTools);
 
 	if (allowedTools !== undefined && allowedTools.length > 0) {
 		args.push("--allowedTools", allowedTools.join(","));
@@ -118,6 +116,10 @@ export function buildInteractiveClaudeArgs(options: {
 	}
 
 	return args;
+}
+
+function normalizeAllowedTools(allowedTools: string[] | undefined): string[] | undefined {
+	return allowedTools?.map((tool) => tool.trim()).filter((tool) => tool.length > 0);
 }
 
 export function normalizeRunResult(
