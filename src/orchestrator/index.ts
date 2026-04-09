@@ -1,5 +1,7 @@
 import { join, resolve } from "node:path";
 import type { ResolvedConfig } from "../config/types";
+import type { HookRunner } from "../hooks/runner";
+import type { HookEvent } from "../hooks/types";
 import type { AgentRuntime } from "../runtime/types";
 import type { StateManager } from "../state";
 import type { PhaseName, ResumeContext, WorkflowRun } from "../state/types";
@@ -94,6 +96,11 @@ export interface WorkflowOrchestratorOptions {
 	onEvent?: OrchestratorEventCallback;
 	/** Override phase handlers (used in tests and by phase implementation tickets). */
 	phases?: Partial<Record<PhaseName, PhaseHandler>>;
+	/**
+	 * Hook runner for emitting lifecycle events to user-defined shell hooks.
+	 * When omitted, hooks are silently skipped.
+	 */
+	hookRunner?: HookRunner;
 }
 
 /**
@@ -125,6 +132,7 @@ export class WorkflowOrchestrator {
 	private readonly projectCwd: string;
 	private readonly onEvent: OrchestratorEventCallback | undefined;
 	private readonly phaseRegistry: Map<PhaseName, PhaseHandler>;
+	private readonly hookRunner: HookRunner | undefined;
 
 	constructor(options: WorkflowOrchestratorOptions) {
 		this.config = options.config;
@@ -138,6 +146,7 @@ export class WorkflowOrchestrator {
 		this.phaseRegistry = new Map(
 			Object.entries({ ...PHASE_STUBS, ...options.phases }) as [PhaseName, PhaseHandler][],
 		);
+		this.hookRunner = options.hookRunner;
 	}
 
 	/**
@@ -154,6 +163,16 @@ export class WorkflowOrchestrator {
 	async run(task: string): Promise<void> {
 		let { run, resumeCtx } = this.resolveOrCreateRun(task);
 		run = this.state.runs.update(run.id, { status: "running" });
+
+		const shouldStart = await this.fireHooks("workflow:start", run.id, {
+			task: run.taskDescription,
+			slug: run.slug,
+		});
+		if (!shouldStart) {
+			this.state.runs.update(run.id, { status: "cancelled" });
+			this.emitEvent({ type: "workflow_failed", runId: run.id, error: "Workflow aborted by hook" });
+			return;
+		}
 
 		let currentPhase: PhaseName = _resolveStartingPhase(resumeCtx);
 
@@ -177,6 +196,7 @@ export class WorkflowOrchestrator {
 			run = this.state.runs.update(run.id, { status: "completed" });
 			const { totalCostUsd } = this.state.getRunCostSummary(run.id);
 			this.emitEvent({ type: "workflow_completed", runId: run.id, totalCostUsd });
+			this.emitHookNotification("workflow:complete", run.id, { totalCostUsd });
 		} catch (error) {
 			if (!(error instanceof PhaseError)) {
 				this.handleUnexpectedRunError(run.id, error);
@@ -190,7 +210,9 @@ export class WorkflowOrchestrator {
 		if (current && (current.status === "running" || current.status === "awaiting_approval")) {
 			this.state.runs.update(runId, { status: "failed" });
 		}
-		this.emitEvent({ type: "workflow_failed", runId, error: toErrorMessage(error) });
+		const errorMessage = toErrorMessage(error);
+		this.emitEvent({ type: "workflow_failed", runId, error: errorMessage });
+		this.emitHookNotification("workflow:failed", runId, { error: errorMessage });
 	}
 
 	/** Returns { run, resumeCtx } — either a fresh run or the existing incomplete one. */
@@ -312,6 +334,7 @@ export class WorkflowOrchestrator {
 		});
 
 		this.emitEvent({ type: "phase_started", runId: run.id, phase });
+		this.emitHookNotification("phase:start", run.id, { phase });
 
 		const ctx = this.buildPhaseContext(run, phase, resumeCtx);
 		const handler = this.phaseRegistry.get(phase);
@@ -323,7 +346,7 @@ export class WorkflowOrchestrator {
 		try {
 			result = await handler(ctx);
 		} catch (error) {
-			await this.handlePhaseError(run, phase, phaseRecord.id, error);
+			this.handlePhaseError(run, phase, phaseRecord.id, error);
 			throw error;
 		}
 
@@ -342,6 +365,11 @@ export class WorkflowOrchestrator {
 			this.emitEvent({
 				type: "phase_completed",
 				runId: run.id,
+				phase,
+				costUsd: result.costUsd,
+				durationMs: result.durationMs,
+			});
+			this.emitHookNotification("phase:complete", run.id, {
 				phase,
 				costUsd: result.costUsd,
 				durationMs: result.durationMs,
@@ -370,6 +398,10 @@ export class WorkflowOrchestrator {
 		this.emitEvent({
 			type: "approval_pending",
 			runId: run.id,
+			phase,
+			artifactPath: resolvedArtifactPath,
+		});
+		this.emitHookNotification("approval:requested", run.id, {
 			phase,
 			artifactPath: resolvedArtifactPath,
 		});
@@ -414,6 +446,11 @@ export class WorkflowOrchestrator {
 			phase,
 			decision: response.decision,
 		});
+		this.emitHookNotification("approval:received", run.id, {
+			phase,
+			decision: response.decision,
+			feedback: response.feedback ?? undefined,
+		});
 
 		return response.decision;
 	}
@@ -426,12 +463,12 @@ export class WorkflowOrchestrator {
 	 *      they don't mask the original failure).
 	 *   4. Mark the WorkflowRun as "failed" in SQLite.
 	 */
-	private async handlePhaseError(
+	private handlePhaseError(
 		run: WorkflowRun,
 		phase: PhaseName,
 		phaseRecordId: string,
 		error: unknown,
-	): Promise<void> {
+	): void {
 		const errorMessage = toErrorMessage(error);
 
 		this.state.phases.update(phaseRecordId, {
@@ -441,17 +478,7 @@ export class WorkflowOrchestrator {
 		});
 
 		this.emitEvent({ type: "phase_failed", runId: run.id, phase, error: errorMessage });
-
-		try {
-			await this.messaging.notify({
-				type: "phase_failed",
-				runId: run.id,
-				phase,
-				error: errorMessage,
-			});
-		} catch {
-			// Messaging failures must not mask the original phase error
-		}
+		this.emitHookNotification("phase:failed", run.id, { phase, error: errorMessage });
 
 		this.state.runs.update(run.id, { status: "failed" });
 	}
@@ -494,6 +521,54 @@ export class WorkflowOrchestrator {
 			return null;
 		}
 		return PHASE_SEQUENCE[idx + 1];
+	}
+
+	/**
+	 * Emit a lifecycle hook event and await the aggregate `continue` decision.
+	 * Used only at abort-eligible points (currently `workflow:start`).
+	 *
+	 * Returns `true` when the workflow should continue (also the default when
+	 * no hook runner is configured). Returns `false` when a blocking hook
+	 * explicitly sets `continue: false`.
+	 *
+	 * All errors from the hook runner are swallowed.
+	 */
+	private async fireHooks(
+		event: HookEvent,
+		runId: string | undefined,
+		payload: Record<string, unknown>,
+	): Promise<boolean> {
+		if (!this.hookRunner) {
+			return true;
+		}
+		try {
+			const result = await this.hookRunner.run({
+				event,
+				timestamp: new Date().toISOString(),
+				runId,
+				payload,
+			});
+			return result.continue;
+		} catch {
+			// Hook runner errors must never crash the orchestrator
+			return true;
+		}
+	}
+
+	/**
+	 * Fire a notification-only hook event (fire-and-forget).
+	 *
+	 * The result is discarded — notification hooks cannot influence control
+	 * flow. Errors are swallowed so they never block the orchestrator.
+	 */
+	private emitHookNotification(
+		event: HookEvent,
+		runId: string | undefined,
+		payload: Record<string, unknown>,
+	): void {
+		this.fireHooks(event, runId, payload).catch(() => {
+			// Hook errors must never crash the orchestrator
+		});
 	}
 
 	/**

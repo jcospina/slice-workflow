@@ -58,9 +58,6 @@ export interface MessagingManager {
 	/** Send an approval request and wait for the first response. */
 	requestApproval(request: ApprovalRequest): Promise<ApprovalResponse>;
 
-	/** Fire-and-forget notification (does not need a response). */
-	notify(event: OrchestratorEvent): Promise<void>;
-
 	/** Gracefully shut down messaging connections. */
 	close(): Promise<void>;
 }
