@@ -97,6 +97,19 @@ export function executeHookCommand(
 	options: ExecuteHookCommandOptions,
 ): Promise<SpawnHookExecutionResult> {
 	return new Promise((resolve) => {
+		// If the abort signal is already fired before we even start, bail immediately.
+		if (options.signal?.aborted) {
+			resolve({
+				stdout: "",
+				stderr: "",
+				exitCode: null,
+				signal: null,
+				timedOut: false,
+				launchError: new Error("Hook execution aborted before start"),
+			});
+			return;
+		}
+
 		const stdout: string[] = [];
 		const stderr: string[] = [];
 		let settled = false;
@@ -105,6 +118,8 @@ export function executeHookCommand(
 			timeoutHandle?: ReturnType<typeof setTimeout>;
 			forceKillHandle?: ReturnType<typeof setTimeout>;
 		} = {};
+
+		let abortCleanup: (() => void) | null = null;
 
 		const finish = (result: SpawnHookExecutionResult) => {
 			if (settled) {
@@ -117,6 +132,7 @@ export function executeHookCommand(
 			if (timers.forceKillHandle) {
 				clearTimeout(timers.forceKillHandle);
 			}
+			abortCleanup?.();
 			resolve(result);
 		};
 
@@ -138,6 +154,20 @@ export function executeHookCommand(
 				launchError: normalizeError(error),
 			});
 			return;
+		}
+
+		// Wire up abort signal: SIGTERM → SIGKILL after grace period.
+		if (options.signal) {
+			const onAbort = () => {
+				child.kill("SIGTERM");
+				timers.forceKillHandle = setTimeout(() => {
+					if (!child.killed) {
+						child.kill("SIGKILL");
+					}
+				}, FORCE_KILL_AFTER_TIMEOUT_MS);
+			};
+			options.signal.addEventListener("abort", onAbort, { once: true });
+			abortCleanup = () => options.signal?.removeEventListener("abort", onAbort);
 		}
 
 		child.stdout?.on("data", (chunk: Buffer | string) => {
