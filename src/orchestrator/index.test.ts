@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import type { HookRunResult, HookRunner } from "../hooks/runner";
+import type { HookEvent, HookInput } from "../hooks/types";
 import { createInMemoryStateManager } from "../state";
 import type { PhaseName } from "../state/types";
 import { PhaseError, StateError } from "../utils/errors";
@@ -44,7 +46,6 @@ function makeMocks() {
 
 	const messaging: MessagingManager = {
 		requestApproval: vi.fn().mockResolvedValue(approvalResponse),
-		notify: vi.fn().mockResolvedValue(undefined),
 		close: vi.fn().mockResolvedValue(undefined),
 	};
 
@@ -90,6 +91,31 @@ function makeAllHandlers(): Partial<Record<PhaseName, PhaseHandler>> {
 		execute: makeHandler(),
 		handoff: makeHandler(),
 	};
+}
+
+function makeHookRunResult(event: HookEvent, continueValue = true): HookRunResult {
+	return {
+		event,
+		input: { event, timestamp: new Date().toISOString(), payload: {} } as HookInput,
+		matchedHooks: 0,
+		executions: [],
+		continue: continueValue,
+		reason: null,
+	};
+}
+
+interface MockHookRunner {
+	hookRunner: HookRunner;
+	runMock: ReturnType<typeof vi.fn>;
+}
+
+function makeHookRunner(continueValue = true): MockHookRunner {
+	const runMock = vi.fn().mockResolvedValue(makeHookRunResult("workflow:start", continueValue));
+	const hookRunner = {
+		run: runMock,
+		resolveMatchingHooks: vi.fn().mockReturnValue([]),
+	} as unknown as HookRunner;
+	return { hookRunner, runMock };
 }
 
 // --- Tests ---
@@ -635,15 +661,17 @@ describe("run() - phase error handling", () => {
 		state.close();
 	});
 
-	it("calls messaging.notify with phase_failed event on phase error", async () => {
+	it("fires phase:failed hook when a phase errors", async () => {
 		const state = createInMemoryStateManager();
 		const mocks = makeMocks();
+		const { hookRunner, runMock } = makeHookRunner();
 
 		const orch = new WorkflowOrchestrator({
 			config: BASE_CONFIG,
 			runtime: MOCK_RUNTIME,
 			state,
 			...mocks,
+			hookRunner,
 			projectCwd: "/project",
 			phases: {
 				"rfc-draft": () => Promise.reject(new Error("notify me")),
@@ -652,9 +680,7 @@ describe("run() - phase error handling", () => {
 
 		await expect(orch.run("test")).rejects.toThrow();
 
-		expect(mocks.messaging.notify).toHaveBeenCalledWith(
-			expect.objectContaining({ type: "phase_failed" }),
-		);
+		expect(runMock).toHaveBeenCalledWith(expect.objectContaining({ event: "phase:failed" }));
 
 		state.close();
 	});
@@ -1062,6 +1088,239 @@ describe("run() - conflicting incomplete run", () => {
 		});
 
 		await expect(orch.run("new task")).rejects.toThrow(StateError);
+
+		state.close();
+	});
+});
+
+describe("run() - hook runner integration", () => {
+	it("fires workflow:start hook before the first phase runs", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+		const { hookRunner, runMock } = makeHookRunner();
+		const rfcHandler = makeHandler();
+
+		const orch = new WorkflowOrchestrator({
+			config: BASE_CONFIG,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			hookRunner,
+			projectCwd: "/project",
+			phases: { ...makeAllHandlers(), "rfc-draft": rfcHandler },
+		});
+
+		await orch.run("test");
+
+		const calls = runMock.mock.calls as [HookInput][];
+		const startIdx = calls.findIndex(([input]) => input.event === "workflow:start");
+		const phaseStartIdx = calls.findIndex(([input]) => input.event === "phase:start");
+		expect(startIdx).toBeGreaterThanOrEqual(0);
+		expect(startIdx).toBeLessThan(phaseStartIdx);
+
+		state.close();
+	});
+
+	it("fires workflow:complete hook after all phases finish", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+		const { hookRunner, runMock } = makeHookRunner();
+
+		const orch = new WorkflowOrchestrator({
+			config: BASE_CONFIG,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			hookRunner,
+			projectCwd: "/project",
+			phases: makeAllHandlers(),
+		});
+
+		await orch.run("test");
+
+		// Give fire-and-forget a tick to settle
+		await new Promise((r) => setTimeout(r, 0));
+
+		const calls = (runMock.mock.calls as [HookInput][]).map(([i]) => i.event);
+		expect(calls).toContain("workflow:complete");
+
+		state.close();
+	});
+
+	it("fires phase:start and phase:complete hooks for each phase", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+		const { hookRunner, runMock } = makeHookRunner();
+
+		const orch = new WorkflowOrchestrator({
+			config: BASE_CONFIG,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			hookRunner,
+			projectCwd: "/project",
+			phases: makeAllHandlers(),
+		});
+
+		await orch.run("test");
+		await new Promise((r) => setTimeout(r, 0));
+
+		const events = (runMock.mock.calls as [HookInput][]).map(([i]) => i.event);
+		expect(events.filter((e) => e === "phase:start")).toHaveLength(5);
+		expect(events.filter((e) => e === "phase:complete")).toHaveLength(5);
+
+		state.close();
+	});
+
+	it("fires approval:requested and approval:received hooks around approval gates", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+		const { hookRunner, runMock } = makeHookRunner();
+		const config = { ...BASE_CONFIG, approvalGates: { rfc: true, plan: false } };
+
+		const orch = new WorkflowOrchestrator({
+			config,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			hookRunner,
+			projectCwd: "/project",
+			phases: makeAllHandlers(),
+		});
+
+		await orch.run("test");
+		await new Promise((r) => setTimeout(r, 0));
+
+		const events = (runMock.mock.calls as [HookInput][]).map(([i]) => i.event);
+		expect(events).toContain("approval:requested");
+		expect(events).toContain("approval:received");
+
+		state.close();
+	});
+
+	it("cancels the run (no throw) when workflow:start hook returns continue: false", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+		const { hookRunner } = makeHookRunner(false); // continue: false
+		const rfcHandler = makeHandler();
+
+		const orch = new WorkflowOrchestrator({
+			config: BASE_CONFIG,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			hookRunner,
+			projectCwd: "/project",
+			phases: { ...makeAllHandlers(), "rfc-draft": rfcHandler },
+		});
+
+		await expect(orch.run("test")).resolves.toBeUndefined();
+
+		expect(rfcHandler).not.toHaveBeenCalled();
+		expect(state.runs.list()[0].status).toBe("cancelled");
+
+		state.close();
+	});
+
+	it("does not abort the run when a non-start hook returns continue: false", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+
+		// Return continue: false only for phase:failed — workflow must still run through
+		const hookRunner = {
+			run: vi.fn().mockImplementation(async (input: HookInput) => ({
+				...makeHookRunResult(input.event, input.event !== "phase:failed"),
+				event: input.event,
+			})),
+			resolveMatchingHooks: vi.fn().mockReturnValue([]),
+		} as unknown as HookRunner;
+
+		const orch = new WorkflowOrchestrator({
+			config: BASE_CONFIG,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			hookRunner,
+			projectCwd: "/project",
+			phases: makeAllHandlers(),
+		});
+
+		// phase:failed hook returning false must not affect successful runs
+		await expect(orch.run("test")).resolves.toBeUndefined();
+		expect(state.runs.list()[0].status).toBe("completed");
+
+		state.close();
+	});
+
+	it("does not crash the orchestrator when the hook runner throws", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+
+		const hookRunner = {
+			run: vi.fn().mockRejectedValue(new Error("hook runner exploded")),
+			resolveMatchingHooks: vi.fn().mockReturnValue([]),
+		} as unknown as HookRunner;
+
+		const orch = new WorkflowOrchestrator({
+			config: BASE_CONFIG,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			hookRunner,
+			projectCwd: "/project",
+			phases: makeAllHandlers(),
+		});
+
+		await expect(orch.run("test")).resolves.toBeUndefined();
+		expect(state.runs.list()[0].status).toBe("completed");
+
+		state.close();
+	});
+
+	it("passes runId and phase in the hook payload", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+		const { hookRunner, runMock } = makeHookRunner();
+
+		const orch = new WorkflowOrchestrator({
+			config: BASE_CONFIG,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			hookRunner,
+			projectCwd: "/project",
+			phases: makeAllHandlers(),
+		});
+
+		await orch.run("test");
+		await new Promise((r) => setTimeout(r, 0));
+
+		const runId = state.runs.list()[0].id;
+		const phaseStartCall = (runMock.mock.calls as [HookInput][]).find(
+			([input]) => input.event === "phase:start",
+		);
+
+		expect(phaseStartCall?.[0].runId).toBe(runId);
+		expect(phaseStartCall?.[0].payload).toMatchObject({ phase: "rfc-draft" });
+
+		state.close();
+	});
+
+	it("works correctly when no hook runner is provided (no-op)", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+
+		const orch = new WorkflowOrchestrator({
+			config: BASE_CONFIG,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			projectCwd: "/project",
+			phases: makeAllHandlers(),
+		});
+
+		await expect(orch.run("test")).resolves.toBeUndefined();
+		expect(state.runs.list()[0].status).toBe("completed");
 
 		state.close();
 	});
