@@ -84,6 +84,7 @@ function resolveHooks(
 	return [...(global ?? []), ...(project ?? [])].map((hook) => ({
 		...hook,
 		timeoutMs: hook.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS,
+		async: hook.async ?? false,
 	}));
 }
 

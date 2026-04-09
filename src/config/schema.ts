@@ -153,6 +153,12 @@ const hookDefinitionSchema = z.object({
 		.positive()
 		.optional()
 		.describe("Per-hook command timeout in milliseconds (defaults to 5000ms when omitted)"),
+	async: z
+		.boolean()
+		.optional()
+		.describe(
+			"When true, the hook runs fire-and-forget and does not block the orchestrator. Defaults to false.",
+		),
 });
 
 const resolvedHookDefinitionSchema = z.object({
@@ -169,6 +175,12 @@ const resolvedHookDefinitionSchema = z.object({
 		.positive()
 		.default(DEFAULT_HOOK_TIMEOUT_MS)
 		.describe("Resolved per-hook timeout in milliseconds (defaults to 5000ms)"),
+	async: z
+		.boolean()
+		.default(false)
+		.describe(
+			"When true, the hook runs fire-and-forget and does not block the orchestrator (default: false).",
+		),
 });
 
 export const globalConfigSchema = z

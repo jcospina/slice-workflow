@@ -1,4 +1,5 @@
 export const DEFAULT_HOOK_TIMEOUT_MS = 5_000;
+export const DEFAULT_DRAIN_TIMEOUT_MS = 5_000;
 
 export const HOOK_EVENTS = [
 	"workflow:start",
@@ -35,8 +36,19 @@ export interface HookDefinition {
 	events: HookEvent[];
 	matcher?: string;
 	timeoutMs?: number;
+	/**
+	 * When `true`, the hook is dispatched as fire-and-forget: the orchestrator
+	 * does not await its completion and it cannot influence the `continue`
+	 * decision.  Pending async hooks are tracked in `AsyncHookRegistry` so
+	 * they can be drained or cancelled on shutdown.
+	 *
+	 * When `false` (default), the hook blocks the orchestrator until it
+	 * settles and its `continue` output is respected.
+	 */
+	async?: boolean;
 }
 
 export interface ResolvedHookDefinition extends HookDefinition {
 	timeoutMs: number;
+	async: boolean;
 }

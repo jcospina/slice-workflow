@@ -135,6 +135,7 @@ function makeHook(
 		events: [event],
 		matcher,
 		timeoutMs,
+		async: false,
 	};
 }
 

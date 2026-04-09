@@ -1,4 +1,10 @@
 import { spawn } from "node:child_process";
+export {
+	createAsyncHookRegistry,
+	type AsyncHookEntry,
+	type AsyncHookRegistry,
+} from "./async-registry";
+import type { AsyncHookRegistry } from "./async-registry";
 import type { HookExecutionResult, HookRunResult, HookRunnerOptions } from "./runner.types";
 import { executeHookCommand, matchesHook, parseHookStdout } from "./runner.utils";
 import type { HookInput, ResolvedHookDefinition } from "./types";
@@ -25,6 +31,7 @@ export class HookRunner {
 	private readonly cwd: string;
 	private readonly spawnImpl: typeof spawn;
 	private readonly now: () => number;
+	private readonly registry: AsyncHookRegistry | undefined;
 
 	/**
 	 * @param options Runner dependencies and resolved hook definitions.
@@ -34,6 +41,7 @@ export class HookRunner {
 		this.cwd = options.cwd ?? process.cwd();
 		this.spawnImpl = options.spawnImpl ?? spawn;
 		this.now = options.now ?? Date.now;
+		this.registry = options.registry;
 	}
 
 	/**
@@ -50,6 +58,14 @@ export class HookRunner {
 	/**
 	 * Runs all matching hooks and aggregates their `continue` decisions.
 	 *
+	 * Blocking hooks (`async: false`, the default) are awaited in order and
+	 * their `continue` output influences the aggregate result.
+	 *
+	 * Async hooks (`async: true`) are dispatched fire-and-forget into the
+	 * `AsyncHookRegistry` (when one is configured) and always contribute
+	 * `continue: true` to the aggregate.  If no registry was provided, async
+	 * hooks fall back to blocking execution so no hooks are silently dropped.
+	 *
 	 * @param input Lifecycle payload emitted by the orchestrator.
 	 * @returns Per-hook execution data plus aggregate continue/reason fields.
 	 */
@@ -60,13 +76,19 @@ export class HookRunner {
 		let continueReason: string | null = null;
 
 		for (const hook of matchingHooks) {
-			const execution = await this.executeHook(hook, input);
-			executions.push(execution);
+			if (hook.async && this.registry) {
+				const execution = this.dispatchAsyncHook(hook, input);
+				executions.push(execution);
+				// Async hooks never block the continue decision.
+			} else {
+				const execution = await this.executeHook(hook, input);
+				executions.push(execution);
 
-			if (!execution.continue) {
-				shouldContinue = false;
-				if (!continueReason) {
-					continueReason = execution.reason ?? `Hook requested stop: ${hook.command}`;
+				if (!execution.continue) {
+					shouldContinue = false;
+					if (!continueReason) {
+						continueReason = execution.reason ?? `Hook requested stop: ${hook.command}`;
+					}
 				}
 			}
 		}
@@ -82,16 +104,55 @@ export class HookRunner {
 	}
 
 	/**
+	 * Dispatches a hook as fire-and-forget into the registry and returns a
+	 * synthetic `pending` result immediately.
+	 *
+	 * @param hook Resolved async hook definition.
+	 * @param input Lifecycle payload to send on stdin.
+	 * @returns Synthetic execution result with `pending: true`.
+	 */
+	private dispatchAsyncHook(hook: ResolvedHookDefinition, input: HookInput): HookExecutionResult {
+		const controller = new AbortController();
+		const startedAt = this.now();
+		const promise = this.executeHook(hook, input, controller.signal);
+
+		this.registry?.register({
+			command: hook.command,
+			startedAt,
+			promise,
+			abort: () => controller.abort(),
+		});
+
+		return {
+			hook,
+			success: true,
+			continue: true,
+			reason: null,
+			error: null,
+			output: null,
+			stdout: "",
+			stderr: "",
+			exitCode: null,
+			signal: null,
+			timedOut: false,
+			durationMs: 0,
+			pending: true,
+		};
+	}
+
+	/**
 	 * Executes one hook command and maps process/protocol outcomes to the stable
 	 * `HookExecutionResult` contract.
 	 *
 	 * @param hook Resolved hook definition to execute.
 	 * @param input Lifecycle payload to serialize and pipe to stdin.
+	 * @param signal Optional abort signal for fire-and-forget (async) execution.
 	 * @returns Normalized execution result for this hook.
 	 */
 	private async executeHook(
 		hook: ResolvedHookDefinition,
 		input: HookInput,
+		signal?: AbortSignal,
 	): Promise<HookExecutionResult> {
 		const startedAt = this.now();
 		const payload = JSON.stringify(input);
@@ -101,6 +162,7 @@ export class HookRunner {
 			payload,
 			cwd: this.cwd,
 			spawnImpl: this.spawnImpl,
+			signal,
 		});
 		const durationMs = Math.max(0, this.now() - startedAt);
 
