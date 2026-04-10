@@ -45,7 +45,7 @@ Each slice is small enough to fit within ~50% of an agent's context window, incl
 | Agent isolation | Git worktrees | Blast radius containment — agents never touch the main working copy |
 | Post-slice review | Evaluator-optimizer loop | Reviewer agent checks changes against DoD, implementer fixes findings |
 
-Status update (April 8, 2026): notification delivery is being migrated to hook-first architecture. Legacy built-in Slack/Telegram notification paths are being replaced with hook adapters.
+Notification delivery uses lifecycle hooks. See [docs/hooks.md](docs/hooks.md) for the full reference, adapter scripts, and migration guide from legacy `messaging.*` config.
 
 ### Provider abstraction
 
