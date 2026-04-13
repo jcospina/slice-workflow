@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DEFAULT_HOOK_TIMEOUT_MS, HOOK_EVENTS } from "../hooks/types";
+import { DEFAULT_HOOK_TIMEOUT_MS, HOOK_ADAPTERS, HOOK_EVENTS } from "../hooks/types";
 
 const providerEnum = z
 	.enum(["claude-code", "opencode"])
@@ -45,45 +45,6 @@ const providersSchema = z.object({
 		.describe("Configuration for the OpenCode agent runtime"),
 });
 
-const slackConfigSchema = z.object({
-	appToken: z
-		.string()
-		.optional()
-		.describe("Slack App-level token (xapp-...) for Socket Mode WebSocket connection"),
-	botToken: z
-		.string()
-		.optional()
-		.describe("Slack Bot token (xoxb-...) for sending messages and handling interactions"),
-	defaultChannel: z
-		.string()
-		.optional()
-		.describe("Default Slack channel for notifications when no project-level channel is set"),
-	channel: z
-		.string()
-		.optional()
-		.describe("Slack channel override for this project's notifications"),
-});
-
-const telegramConfigSchema = z.object({
-	botToken: z
-		.string()
-		.optional()
-		.describe("Telegram bot token from @BotFather for sending messages and inline keyboards"),
-	chatId: z
-		.string()
-		.optional()
-		.describe("Telegram chat ID for the target conversation (user or group)"),
-});
-
-const messagingSchema = z.object({
-	slack: slackConfigSchema
-		.optional()
-		.describe("Slack integration for bidirectional notifications and approval gates"),
-	telegram: telegramConfigSchema
-		.optional()
-		.describe("Telegram integration for bidirectional notifications and approval gates"),
-});
-
 const approvalGatesSchema = z.object({
 	rfc: z
 		.boolean()
@@ -120,6 +81,7 @@ const reviewSchema = z.object({
 const hookEventEnum = z
 	.enum(HOOK_EVENTS)
 	.describe("Lifecycle event that can trigger notification hooks");
+const hookAdapterEnum = z.enum(HOOK_ADAPTERS).describe("Built-in hook adapter shipped with slice");
 
 function isValidRegex(pattern: string): boolean {
 	try {
@@ -139,27 +101,44 @@ const hookMatcherSchema = z
 		"Regex pattern tested against the serialized hook input JSON payload; if omitted, the hook matches all payloads for its events",
 	);
 
-const hookDefinitionSchema = z.object({
-	command: z
-		.string()
-		.trim()
-		.min(1)
-		.describe("Shell command to execute when a configured lifecycle event is emitted"),
-	events: z.array(hookEventEnum).min(1).describe("Lifecycle events that can trigger this hook"),
-	matcher: hookMatcherSchema.optional(),
-	timeoutMs: z
-		.number()
-		.int()
-		.positive()
-		.optional()
-		.describe("Per-hook command timeout in milliseconds (defaults to 5000ms when omitted)"),
-	async: z
-		.boolean()
-		.optional()
-		.describe(
-			"When true, the hook runs fire-and-forget and does not block the orchestrator. Defaults to false.",
-		),
-});
+const hookEnvVarNameSchema = z.string().trim().min(1).describe("Environment variable key name");
+
+const hookEnvFromSchema = z
+	.record(hookEnvVarNameSchema, hookEnvVarNameSchema)
+	.describe("Map target env vars to source env var names from the current process environment");
+
+const hookDefinitionSchema = z
+	.object({
+		command: z
+			.string()
+			.trim()
+			.min(1)
+			.optional()
+			.describe("Shell command to execute when a configured lifecycle event is emitted"),
+		adapter: hookAdapterEnum.optional(),
+		events: z.array(hookEventEnum).min(1).describe("Lifecycle events that can trigger this hook"),
+		matcher: hookMatcherSchema.optional(),
+		timeoutMs: z
+			.number()
+			.int()
+			.positive()
+			.optional()
+			.describe("Per-hook command timeout in milliseconds (defaults to 5000ms when omitted)"),
+		async: z
+			.boolean()
+			.optional()
+			.describe("When true, the hook runs fire-and-forget and does not block the orchestrator."),
+		envFrom: hookEnvFromSchema.optional(),
+	})
+	.superRefine((value, ctx) => {
+		const hasCommand = typeof value.command === "string";
+		const hasAdapter = typeof value.adapter === "string";
+		if (hasCommand === hasAdapter) {
+			const message = "Hook must define exactly one of 'command' or 'adapter'";
+			ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["command"], message });
+			ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["adapter"], message });
+		}
+	});
 
 const resolvedHookDefinitionSchema = z.object({
 	command: z
@@ -167,6 +146,7 @@ const resolvedHookDefinitionSchema = z.object({
 		.trim()
 		.min(1)
 		.describe("Shell command to execute when a configured lifecycle event is emitted"),
+	adapter: hookAdapterEnum.optional(),
 	events: z.array(hookEventEnum).min(1).describe("Lifecycle events that can trigger this hook"),
 	matcher: hookMatcherSchema.optional(),
 	timeoutMs: z
@@ -181,6 +161,11 @@ const resolvedHookDefinitionSchema = z.object({
 		.describe(
 			"When true, the hook runs fire-and-forget and does not block the orchestrator (default: false).",
 		),
+	envFrom: hookEnvFromSchema.optional(),
+	env: z
+		.record(hookEnvVarNameSchema, z.string())
+		.optional()
+		.describe("Resolved environment variables injected into the hook subprocess"),
 });
 
 export const globalConfigSchema = z
@@ -189,9 +174,6 @@ export const globalConfigSchema = z
 			.optional()
 			.describe("Default agent runtime used when no project-level provider is set"),
 		providers: providersSchema.optional().describe("Model configuration for each agent runtime"),
-		messaging: messagingSchema
-			.optional()
-			.describe("Global messaging tokens shared across all projects"),
 		hooks: z
 			.array(hookDefinitionSchema)
 			.optional()
@@ -224,9 +206,6 @@ export const projectConfigSchema = z
 		review: reviewSchema
 			.optional()
 			.describe("Post-slice review loop configuration (evaluator-optimizer pattern)"),
-		messaging: messagingSchema
-			.optional()
-			.describe("Project-level messaging overrides (e.g. channel per project)"),
 		hooks: z
 			.array(hookDefinitionSchema)
 			.optional()
@@ -235,21 +214,6 @@ export const projectConfigSchema = z
 			),
 	})
 	.describe("Project-level configuration stored at .slicerc in the project root");
-
-// --- Resolved config schema (output of merge, with defaults) ---
-
-const resolvedSlackConfigSchema = z.object({
-	appToken: z
-		.string()
-		.describe("Slack App-level token (xapp-...) — required for Slack to be active"),
-	botToken: z.string().describe("Slack Bot token (xoxb-...) — required for Slack to be active"),
-	channel: z.string().describe("Resolved Slack channel for this project's notifications"),
-});
-
-const resolvedTelegramConfigSchema = z.object({
-	botToken: z.string().describe("Telegram bot token — required for Telegram to be active"),
-	chatId: z.string().describe("Telegram chat ID — required for Telegram to be active"),
-});
 
 export const resolvedConfigSchema = z
 	.object({
@@ -269,19 +233,6 @@ export const resolvedConfigSchema = z
 			})
 			.default({ claudeCode: {}, opencode: {} })
 			.describe("Merged model configuration for each agent runtime"),
-		messaging: z
-			.object({
-				slack: resolvedSlackConfigSchema
-					.optional()
-					.describe("Present only when both appToken and botToken are configured"),
-				telegram: resolvedTelegramConfigSchema
-					.optional()
-					.describe("Present only when both botToken and chatId are configured"),
-			})
-			.default({})
-			.describe(
-				"Resolved messaging integrations (only includes platforms with complete credentials)",
-			),
 		hooks: z
 			.array(resolvedHookDefinitionSchema)
 			.default([])

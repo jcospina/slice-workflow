@@ -161,6 +161,7 @@ export class HookRunner {
 			timeoutMs: hook.timeoutMs,
 			payload,
 			cwd: this.cwd,
+			env: hook.env ? { ...process.env, ...hook.env } : process.env,
 			spawnImpl: this.spawnImpl,
 			signal,
 		});

@@ -54,4 +54,12 @@ export default defineConfig([
 			copyBundledExamples("dist");
 		},
 	},
+	{
+		entry: ["src/hooks/adapters/notify-slack.ts", "src/hooks/adapters/notify-telegram.ts"],
+		format: ["esm"],
+		target: "es2022",
+		outDir: "dist/hooks/adapters",
+		clean: false,
+		sourcemap: true,
+	},
 ]);

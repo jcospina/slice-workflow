@@ -17,7 +17,10 @@ export const HOOK_EVENTS = [
 	"approval:received",
 ] as const;
 
+export const HOOK_ADAPTERS = ["slack", "telegram"] as const;
+
 export type HookEvent = (typeof HOOK_EVENTS)[number];
+export type HookAdapter = (typeof HOOK_ADAPTERS)[number];
 
 export interface HookInput {
 	event: HookEvent;
@@ -32,10 +35,12 @@ export interface HookOutput {
 }
 
 export interface HookDefinition {
-	command: string;
+	command?: string;
+	adapter?: HookAdapter;
 	events: HookEvent[];
 	matcher?: string;
 	timeoutMs?: number;
+	envFrom?: Record<string, string>;
 	/**
 	 * When `true`, the hook is dispatched as fire-and-forget: the orchestrator
 	 * does not await its completion and it cannot influence the `continue`
@@ -49,6 +54,8 @@ export interface HookDefinition {
 }
 
 export interface ResolvedHookDefinition extends HookDefinition {
+	command: string;
 	timeoutMs: number;
 	async: boolean;
+	env?: Record<string, string>;
 }

@@ -36,7 +36,6 @@ describe("registerPlanCommand", () => {
 		loadConfigMock.mockReturnValue({
 			provider: "claude-code",
 			providers: { claudeCode: {}, opencode: {} },
-			messaging: {},
 			hooks: [],
 			implementationsDir: "implementations",
 			approvalGates: { rfc: false, plan: false },

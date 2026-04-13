@@ -1,8 +1,12 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_HOOK_TIMEOUT_MS } from "../hooks/types";
+
+vi.mock("../hooks/adapters/path", () => ({
+	createBundledHookAdapterCommand: vi.fn((adapter: string) => `bundled:${adapter}`),
+}));
 import { DEFAULTS, loadGlobalConfig, loadProjectConfig, resolveConfig } from "./index";
 import type { GlobalConfig, ProjectConfig } from "./types";
 
@@ -47,71 +51,6 @@ describe("resolveConfig", () => {
 		expect(result.providers.opencode.command).toBe("opencode-personal");
 	});
 
-	it("resolves slack messaging when tokens are in global", () => {
-		const global: GlobalConfig = {
-			messaging: {
-				slack: {
-					appToken: "xapp-1-test",
-					botToken: "xoxb-test",
-					defaultChannel: "#global-channel",
-				},
-			},
-		};
-		const result = resolveConfig(global, {});
-		expect(result.messaging.slack).toEqual({
-			appToken: "xapp-1-test",
-			botToken: "xoxb-test",
-			channel: "#global-channel",
-		});
-	});
-
-	it("project slack channel overrides global defaultChannel", () => {
-		const global: GlobalConfig = {
-			messaging: {
-				slack: {
-					appToken: "xapp-1-test",
-					botToken: "xoxb-test",
-					defaultChannel: "#global-channel",
-				},
-			},
-		};
-		const project: ProjectConfig = {
-			messaging: { slack: { channel: "#project-channel" } },
-		};
-		const result = resolveConfig(global, project);
-		expect(result.messaging.slack?.channel).toBe("#project-channel");
-		expect(result.messaging.slack?.appToken).toBe("xapp-1-test");
-	});
-
-	it("omits slack when tokens are missing", () => {
-		const global: GlobalConfig = {
-			messaging: { slack: { defaultChannel: "#no-tokens" } },
-		};
-		const result = resolveConfig(global, {});
-		expect(result.messaging.slack).toBeUndefined();
-	});
-
-	it("resolves telegram messaging", () => {
-		const global: GlobalConfig = {
-			messaging: {
-				telegram: { botToken: "123:ABC", chatId: "-100123" },
-			},
-		};
-		const result = resolveConfig(global, {});
-		expect(result.messaging.telegram).toEqual({
-			botToken: "123:ABC",
-			chatId: "-100123",
-		});
-	});
-
-	it("omits telegram when chatId is missing", () => {
-		const global: GlobalConfig = {
-			messaging: { telegram: { botToken: "123:ABC" } },
-		};
-		const result = resolveConfig(global, {});
-		expect(result.messaging.telegram).toBeUndefined();
-	});
-
 	it("resolves hooks to an empty array when omitted", () => {
 		const result = resolveConfig({}, {});
 		expect(result.hooks).toEqual([]);
@@ -138,6 +77,47 @@ describe("resolveConfig", () => {
 		expect(result.hooks[0].timeoutMs).toBe(DEFAULT_HOOK_TIMEOUT_MS);
 		expect(result.hooks[1].timeoutMs).toBe(9_000);
 		expect(result.hooks[2].timeoutMs).toBe(DEFAULT_HOOK_TIMEOUT_MS);
+	});
+
+	it("resolves adapter hooks to bundled commands and defaults async=true", () => {
+		const global: GlobalConfig = {
+			hooks: [{ adapter: "slack", events: ["workflow:failed"] }],
+		};
+
+		const result = resolveConfig(global, {});
+
+		expect(result.hooks).toHaveLength(1);
+		expect(result.hooks[0]?.command).toBe("bundled:slack");
+		expect(result.hooks[0]?.async).toBe(true);
+	});
+
+	it("resolves envFrom mappings from process.env", () => {
+		const previous = process.env.SLICEWORKF_TEST_TOKEN;
+		process.env.SLICEWORKF_TEST_TOKEN = "token-from-env";
+		try {
+			const result = resolveConfig(
+				{
+					hooks: [
+						{
+							command: "echo hook",
+							events: ["workflow:failed"],
+							// biome-ignore lint/style/useNamingConvention: env vars are uppercase by convention.
+							envFrom: { SLACK_BOT_TOKEN: "SLICEWORKF_TEST_TOKEN" },
+						},
+					],
+				},
+				{},
+			);
+
+			// biome-ignore lint/style/useNamingConvention: env vars are uppercase by convention.
+			expect(result.hooks[0]?.env).toEqual({ SLACK_BOT_TOKEN: "token-from-env" });
+		} finally {
+			if (previous === undefined) {
+				process.env.SLICEWORKF_TEST_TOKEN = undefined;
+			} else {
+				process.env.SLICEWORKF_TEST_TOKEN = previous;
+			}
+		}
 	});
 
 	it("applies project overrides for all scalar fields", () => {
@@ -218,6 +198,12 @@ describe("loadGlobalConfig", () => {
 		expect(() => loadGlobalConfig(configPath)).toThrow("Invalid config");
 	});
 
+	it("throws when legacy messaging config is present", () => {
+		const configPath = join(tmpDir, "config.json");
+		writeFileSync(configPath, JSON.stringify({ messaging: { slack: { botToken: "xoxb-1" } } }));
+		expect(() => loadGlobalConfig(configPath)).toThrow("messaging");
+	});
+
 	it("throws when hooks include an unknown lifecycle event", () => {
 		const configPath = join(tmpDir, "config.json");
 		writeFileSync(
@@ -238,6 +224,17 @@ describe("loadGlobalConfig", () => {
 			}),
 		);
 		expect(() => loadGlobalConfig(configPath)).toThrow("Invalid config");
+	});
+
+	it("throws when a hook defines both command and adapter", () => {
+		const configPath = join(tmpDir, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				hooks: [{ command: "notify", adapter: "slack", events: ["workflow:failed"] }],
+			}),
+		);
+		expect(() => loadGlobalConfig(configPath)).toThrow("exactly one");
 	});
 
 	it("throws when hook timeout is non-positive", () => {
@@ -310,6 +307,11 @@ describe("loadProjectConfig", () => {
 		expect(() => loadProjectConfig(tmpDir)).toThrow("Invalid config");
 	});
 
+	it("throws when legacy project messaging config is present", () => {
+		writeFileSync(join(tmpDir, ".slicerc"), JSON.stringify({ messaging: { telegram: {} } }));
+		expect(() => loadProjectConfig(tmpDir)).toThrow("messaging");
+	});
+
 	it("throws when project hook command is missing", () => {
 		writeFileSync(
 			join(tmpDir, ".slicerc"),
@@ -318,6 +320,17 @@ describe("loadProjectConfig", () => {
 			}),
 		);
 		expect(() => loadProjectConfig(tmpDir)).toThrow("Invalid config");
+	});
+
+	it("accepts project adapter-only hooks", () => {
+		writeFileSync(
+			join(tmpDir, ".slicerc"),
+			JSON.stringify({
+				hooks: [{ adapter: "telegram", events: ["workflow:failed"] }],
+			}),
+		);
+		const result = loadProjectConfig(tmpDir);
+		expect(result.hooks?.[0]?.adapter).toBe("telegram");
 	});
 
 	it("throws when project hook command is empty", () => {
@@ -354,13 +367,7 @@ describe("loadConfig end-to-end", () => {
 			JSON.stringify({
 				defaultProvider: "opencode",
 				providers: { opencode: { model: "gpt-4o", command: "opencode-work" } },
-				messaging: {
-					slack: {
-						appToken: "xapp-1",
-						botToken: "xoxb-1",
-						defaultChannel: "#global",
-					},
-				},
+				hooks: [{ command: "global-hook", events: ["workflow:failed"] }],
 			}),
 		);
 		writeFileSync(
@@ -369,7 +376,7 @@ describe("loadConfig end-to-end", () => {
 				provider: "claude-code",
 				implementationsDir: "my-impl",
 				providers: { claudeCode: { command: "klaude" } },
-				messaging: { slack: { channel: "#project" } },
+				hooks: [{ adapter: "slack", events: ["workflow:complete"] }],
 			}),
 		);
 
@@ -382,8 +389,9 @@ describe("loadConfig end-to-end", () => {
 		expect(result.providers.opencode.command).toBe("opencode-work");
 		expect(result.providers.claudeCode.command).toBe("klaude");
 		expect(result.implementationsDir).toBe("my-impl");
-		expect(result.messaging.slack?.channel).toBe("#project");
-		expect(result.messaging.slack?.appToken).toBe("xapp-1");
+		expect(result.hooks).toHaveLength(2);
+		expect(result.hooks[0]?.command).toBe("global-hook");
+		expect(result.hooks[1]?.command).toBe("bundled:slack");
 		expect(result.approvalGates).toEqual({ rfc: true, plan: true });
 		expect(result.review.enabled).toBe(true);
 	});

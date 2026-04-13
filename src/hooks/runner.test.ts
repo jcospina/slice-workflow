@@ -86,6 +86,30 @@ describe("HookRunner", () => {
 		expect(result.executions[0]?.error).toContain("malformed JSON");
 	});
 
+	it("injects resolved hook env values into the subprocess", async () => {
+		const script = await createScript(tempDirs, "output-env.js", [
+			"if (process.env.HOOK_SECRET !== 'present') {",
+			"  process.exit(2);",
+			"}",
+			"process.stdout.write('{}');",
+		]);
+
+		const runner = createHookRunner({
+			hooks: [
+				{
+					...makeHook(nodeCommand(script), "workflow:start"),
+					// biome-ignore lint/style/useNamingConvention: env vars are uppercase by convention.
+					env: { HOOK_SECRET: "present" },
+				},
+			],
+			cwd: process.cwd(),
+		});
+		const result = await runner.run(makeInput({ event: "workflow:start" }));
+
+		expect(result.continue).toBe(true);
+		expect(result.executions[0]?.success).toBe(true);
+	});
+
 	it("enforces timeout and kills long-running hook commands", async () => {
 		const child = createTimeoutChildProcess();
 		const spawnImpl = vi.fn(() => child) as unknown as typeof spawn;

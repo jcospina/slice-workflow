@@ -9,6 +9,8 @@ AI workflow orchestrator for automating large-scale development tasks using a sl
 ```text
 slice                         # Opens the TUI
 slice resume --pr 123         # Resume from PR feedback
+slice smoke-slack --channel C01234ABCDE
+slice smoke-telegram --chat-id -100123456789
 
 Workflow:
   1. RFC Draft        — Interactive agent conversation to clarify requirements
@@ -45,7 +47,7 @@ Each slice is small enough to fit within ~50% of an agent's context window, incl
 | Agent isolation | Git worktrees | Blast radius containment — agents never touch the main working copy |
 | Post-slice review | Evaluator-optimizer loop | Reviewer agent checks changes against DoD, implementer fixes findings |
 
-Notification delivery uses lifecycle hooks. See [docs/hooks.md](docs/hooks.md) for the full reference, adapter scripts, and migration guide from legacy `messaging.*` config.
+Notification delivery uses lifecycle hooks. See [docs/hooks.md](docs/hooks.md) for the full reference, bundled `slack`/`telegram` adapters, and `envFrom` secret mapping.
 
 ### Provider abstraction
 
@@ -78,8 +80,22 @@ Approvals are channel-agnostic and return one `ApprovalResult` contract. Dependi
 {
   "defaultProvider": "claude-code",
   "hooks": [
-    { "command": "node ./scripts/notify-slack.js", "events": ["workflow:complete", "workflow:failed"] },
-    { "command": "node ./scripts/notify-telegram.js", "events": ["slice:failed"] }
+    {
+      "adapter": "slack",
+      "events": ["workflow:complete", "workflow:failed"],
+      "envFrom": {
+        "SLACK_BOT_TOKEN": "SLICE_SLACK_BOT_TOKEN",
+        "SLACK_CHANNEL": "SLICE_SLACK_CHANNEL"
+      }
+    },
+    {
+      "adapter": "telegram",
+      "events": ["slice:failed"],
+      "envFrom": {
+        "TELEGRAM_BOT_TOKEN": "SLICE_TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID": "SLICE_TELEGRAM_CHAT_ID"
+      }
+    }
   ]
 }
 ```

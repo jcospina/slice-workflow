@@ -141,6 +141,7 @@ export function executeHookCommand(
 		try {
 			child = options.spawnImpl(options.command, {
 				cwd: options.cwd,
+				env: options.env,
 				shell: true,
 				stdio: ["pipe", "pipe", "pipe"],
 			});

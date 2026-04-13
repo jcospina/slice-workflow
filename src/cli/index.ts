@@ -5,6 +5,7 @@ import { registerPlanCommand } from "./commands/plan";
 import { registerResumeCommand } from "./commands/resume";
 import { registerRfcDraftCommand } from "./commands/rfc-draft";
 import { registerSetupGithubCommand } from "./commands/setup-github";
+import { registerSmokeSlackCommand, registerSmokeTelegramCommand } from "./commands/smoke";
 import { startTui } from "./tui/index";
 
 export function createProgram(): Command {
@@ -33,6 +34,8 @@ export function createProgram(): Command {
 	registerDraftPolishCommand(program);
 	registerPlanCommand(program);
 	registerSetupGithubCommand(program);
+	registerSmokeSlackCommand(program);
+	registerSmokeTelegramCommand(program);
 
 	program.showHelpAfterError(true);
 
