@@ -30,6 +30,20 @@ describe("createProgram", () => {
 		expect(setupGithub.description()).toBe("Install the Slice GitHub Action in your repository");
 	});
 
+	it("registers the smoke-slack command", () => {
+		const smokeSlack = findCommand("smoke-slack");
+		expect(smokeSlack.description()).toBe(
+			"Send a Slack smoke notification using the bundled adapter",
+		);
+	});
+
+	it("registers the smoke-telegram command", () => {
+		const smokeTelegram = findCommand("smoke-telegram");
+		expect(smokeTelegram.description()).toBe(
+			"Send a Telegram smoke notification using the bundled adapter",
+		);
+	});
+
 	it("registers the draft-polish command", () => {
 		const draftPolish = findCommand("draft-polish");
 		expect(draftPolish.description()).toBe(

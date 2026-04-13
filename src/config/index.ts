@@ -3,9 +3,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { z } from "zod";
 import { ZodError } from "zod";
+import { createBundledHookAdapterCommand } from "../hooks/adapters/path";
 import { DEFAULT_HOOK_TIMEOUT_MS } from "../hooks/types";
 import { globalConfigSchema, projectConfigSchema, resolvedConfigSchema } from "./schema";
-import type { GlobalConfig, ProjectConfig, ResolvedConfig } from "./types";
+import type { GlobalConfig, HookDefinition, ProjectConfig, ResolvedConfig } from "./types";
 
 export { globalConfigSchema, projectConfigSchema, resolvedConfigSchema } from "./schema";
 export type {
@@ -17,8 +18,6 @@ export type {
 	ProjectConfig,
 	ResolvedConfig,
 	ResolvedHookDefinition,
-	ResolvedSlackConfig,
-	ResolvedTelegramConfig,
 	Provider,
 	SliceExecution,
 	SeverityLevel,
@@ -32,7 +31,8 @@ export const DEFAULTS: ResolvedConfig = resolvedConfigSchema.parse({});
 function loadJsonFile<T>(path: string, schema: z.ZodType<T>): T {
 	try {
 		const content = readFileSync(path, "utf-8");
-		const json = JSON.parse(content);
+		const json = JSON.parse(content) as unknown;
+		assertMessagingRemoved(path, json);
 		return schema.parse(json);
 	} catch (error) {
 		if (
@@ -53,6 +53,18 @@ function loadJsonFile<T>(path: string, schema: z.ZodType<T>): T {
 	}
 }
 
+function assertMessagingRemoved(path: string, value: unknown): void {
+	if (isRecord(value) && "messaging" in value) {
+		throw new Error(
+			`Invalid config at ${path}:\n  - messaging: 'messaging' has been removed. Use hooks[].adapter with envFrom instead.`,
+		);
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
 export function loadGlobalConfig(path: string = GLOBAL_CONFIG_PATH): GlobalConfig {
 	return loadJsonFile(path, globalConfigSchema);
 }
@@ -68,7 +80,6 @@ export function resolveConfig(global: GlobalConfig, project: ProjectConfig): Res
 			claudeCode: { ...global.providers?.claudeCode, ...project.providers?.claudeCode },
 			opencode: { ...global.providers?.opencode, ...project.providers?.opencode },
 		},
-		messaging: resolveMessaging(global.messaging, project.messaging),
 		hooks: resolveHooks(global.hooks, project.hooks),
 		implementationsDir: project.implementationsDir,
 		approvalGates: project.approvalGates,
@@ -81,57 +92,42 @@ function resolveHooks(
 	global?: GlobalConfig["hooks"],
 	project?: ProjectConfig["hooks"],
 ): ResolvedConfig["hooks"] {
-	return [...(global ?? []), ...(project ?? [])].map((hook) => ({
-		...hook,
-		timeoutMs: hook.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS,
-		async: hook.async ?? false,
-	}));
+	return [...(global ?? []), ...(project ?? [])].map((hook) => {
+		const command = resolveHookCommand(hook);
+		const env = resolveHookEnv(hook.envFrom);
+		return {
+			...hook,
+			command,
+			env,
+			timeoutMs: hook.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS,
+			async: hook.async ?? Boolean(hook.adapter),
+		};
+	});
 }
 
-function resolveMessaging(
-	global?: GlobalConfig["messaging"],
-	project?: ProjectConfig["messaging"],
-): ResolvedConfig["messaging"] {
-	const result: ResolvedConfig["messaging"] = {};
-
-	const slack = resolveSlack(global?.slack, project?.slack);
-	if (slack) {
-		result.slack = slack;
+function resolveHookCommand(hook: HookDefinition): string {
+	if (hook.command) {
+		return hook.command;
 	}
-
-	const telegram = resolveTelegram(global?.telegram, project?.telegram);
-	if (telegram) {
-		result.telegram = telegram;
+	if (hook.adapter) {
+		return createBundledHookAdapterCommand(hook.adapter);
 	}
-
-	return result;
+	// Config schema prevents this state.
+	throw new Error("Invalid hook definition: missing command and adapter");
 }
 
-function resolveSlack(
-	global?: NonNullable<GlobalConfig["messaging"]>["slack"],
-	project?: NonNullable<ProjectConfig["messaging"]>["slack"],
-): ResolvedConfig["messaging"]["slack"] | undefined {
-	const appToken = project?.appToken ?? global?.appToken;
-	const botToken = project?.botToken ?? global?.botToken;
-	if (!(appToken && botToken)) {
+function resolveHookEnv(envFrom?: Record<string, string>): Record<string, string> | undefined {
+	if (!envFrom) {
 		return undefined;
 	}
-
-	const channel =
-		project?.channel ?? global?.channel ?? global?.defaultChannel ?? "#slice-notifications";
-	return { appToken, botToken, channel };
-}
-
-function resolveTelegram(
-	global?: NonNullable<GlobalConfig["messaging"]>["telegram"],
-	project?: NonNullable<ProjectConfig["messaging"]>["telegram"],
-): ResolvedConfig["messaging"]["telegram"] | undefined {
-	const botToken = project?.botToken ?? global?.botToken;
-	const chatId = project?.chatId ?? global?.chatId;
-	if (!(botToken && chatId)) {
-		return undefined;
+	const env: Record<string, string> = {};
+	for (const [targetVar, sourceVar] of Object.entries(envFrom)) {
+		const value = process.env[sourceVar];
+		if (typeof value === "string") {
+			env[targetVar] = value;
+		}
 	}
-	return { botToken, chatId };
+	return Object.keys(env).length > 0 ? env : undefined;
 }
 
 export function loadConfig(cwd?: string): ResolvedConfig {

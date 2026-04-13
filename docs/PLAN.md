@@ -46,7 +46,7 @@ TUI Flow:
 | Post-slice review | Evaluator-optimizer loop | Separate reviewer agent checks changes against DoD, implementer fixes findings. Max iterations configurable |
 | Framework | Custom orchestration | Existing agent SDKs are meant for API-calling agents, not subprocess-based coding agents. |
 | Approval gates | Approval gateway + TUI fallback | Unified `ApprovalResult`; channel adapters are optional and can be swapped without orchestrator changes |
-| Notifications | Lifecycle hook runner (`hooks[]`) | Extensible command hooks (Slack/Telegram/Discord/webhooks/custom scripts) without hardcoding channels in core |
+| Notifications | Lifecycle hook runner (`hooks[]`) | Extensible command hooks plus bundled `slack` / `telegram` adapters, with secrets mapped from env vars rather than stored in config |
 | PR feedback | GitHub Action on "Changes Requested" -> posts `slice resume --pr N` | Automated trigger, manual execution |
 | RFC phase | Interactive terminal (spawn `claude` or `opencode` with `stdio: inherit`) | Full agent UX for conversations |
 | Config | `.slicerc` (project) + `~/.slice/config.json` (global) | Per-project customization |
@@ -136,13 +136,13 @@ slice/
 |   |   +-- migrations.ts            # DB schema migrations
 |   |   +-- types.ts                 # WorkflowRun, PhaseRecord, SliceRecord
 |   |
-|   +-- messaging/                   # Legacy approval path during migration to hook-first notifications
 |   |
 |   +-- github/
 |   |   +-- action.ts                # GitHub Action YAML generator
 |   |   +-- resume-context.ts        # Fetch PR review context via gh
 |   |
 |   +-- hooks/
+|   |   +-- adapters/                # Bundled Slack/Telegram hook adapters
 |   |   +-- types.ts                 # HookEvent, HookInput, HookOutput, HookDefinition
 |   |   +-- runner.ts                # Hook execution engine (spawn, stdin JSON, abort support)
 |   +-- diagnostics/

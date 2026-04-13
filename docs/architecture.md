@@ -4,7 +4,7 @@
 
 This document explains how `slice` works as an integrated architecture, with focus on runtime behavior, state management, and component wiring.
 
-Status update (April 8, 2026): notifications are being migrated from hardcoded Slack/Telegram fan-out to lifecycle hooks. Approval gating remains separate and channel-agnostic.
+Status update (April 10, 2026): notifications use lifecycle hooks with bundled Slack/Telegram adapters and env-based secret mapping. Approval gating remains separate and channel-agnostic.
 
 ## System at a glance
 
@@ -43,7 +43,7 @@ flowchart LR
 
     ORCH --> HK[Hook Runner]
     HK --> HOOKS[User-defined shell hooks]
-    HK --> ADPT[Channel adapters e.g. Slack or Telegram]
+    HK --> ADPT[Bundled Slack/Telegram adapters]
 ```
 
 ## Architectural model: two data planes and one control plane

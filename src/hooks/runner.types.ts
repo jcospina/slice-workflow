@@ -87,6 +87,7 @@ export interface ExecuteHookCommandOptions {
 	timeoutMs: number;
 	payload: string;
 	cwd: string;
+	env?: NodeJS.ProcessEnv;
 	spawnImpl: typeof spawn;
 	/**
 	 * Optional abort signal.  When the signal fires the hook process receives
