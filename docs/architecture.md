@@ -300,14 +300,14 @@ Key behavior constraints:
 | SliceExecutionContext (`src/runtime/slice-context.ts`) | Read/write contract for each slice agent | Plan doc, PROGRESS.md, track doc, cost | Read-only contract; worktreePath is the only writable root |
 | WorktreeManager (`src/orchestrator/worktree.ts`) | Worktree create/setup/cleanup and isolation | Repo git state | Worktree filesystem |
 | Prompt builder (`src/prompts`) | Deterministic prompt composition | Plan doc, PROGRESS.md, current track | Prompt strings |
-| Approval gateway (`src/cli/ui/approval-gate.ts`) | Collect approval decisions (TUI or adapter-backed channel), return `ApprovalResult` | Approval request payload | Approval decision persisted to state |
+| Approval gateway (`src/cli/ui/approval-gate.ts`) | Collect approval decisions via TUI inline controls (approve / request changes / reject), return `ApprovalResult` | Approval request payload | Approval decision persisted to state |
 | Hook runner (`src/hooks/runner.ts`) | Fire user-defined shell commands at lifecycle events | HookDefinitions from config | stdout responses; can signal abort |
 | DiagnosticTracker (`src/diagnostics/tracker.ts`) | Capture tsc/lint/test baselines and compute post-slice delta | Worktree output | DiagnosticDelta for reviewer prompt |
 | GitHub resume integration (`src/github`) | Resume context from PR review feedback | PR comments and diff context | Resume invocation context |
 
 ## Approval and notification wiring
 
-Notification delivery is hook-first. Approval remains a separate contract that can use TUI-only or adapter-backed channels.
+Notification delivery is hook-first. Approval is TUI-only — approval gates pause execution and surface inline controls in the running TUI for the user to approve, request changes, or reject. External channels (Slack, Telegram) may receive informational hook notifications about pending approval requests but cannot submit approval decisions.
 
 ```mermaid
 flowchart LR
@@ -322,15 +322,11 @@ flowchart LR
 ```mermaid
 flowchart LR
     O[Orchestrator hits approval gate] --> AG[Approval Gateway]
-    AG --> UI[TUI]
-    AG --> CA[Optional channel adapter]
+    AG --> UI[TUI inline controls]
     UI --> AR[ApprovalResult]
-    CA --> AR
     AR --> O
     O --> DB[(SQLite state update)]
 ```
-
-Behavioral rule: first valid response wins when multiple channels respond.
 
 ## Runtime abstraction and provider independence
 
