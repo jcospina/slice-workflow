@@ -10,3 +10,4 @@ coverage/
 implementations/
 .internal
 .slice/
+.trees/
