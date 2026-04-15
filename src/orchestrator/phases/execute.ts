@@ -1,5 +1,9 @@
 import { copyFile, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import {
+	type SliceExecutionContext,
+	buildSliceExecutionContext,
+} from "../../runtime/slice-context";
 import type { AgentRunResult } from "../../runtime/types";
 import type { SliceRecord } from "../../state/types";
 import type { PhaseContext, PhaseResult } from "./types";
@@ -160,23 +164,27 @@ async function syncProgressFromWorktree(
 
 // --- Prompt builder ---
 
-interface SlicePaths {
-	planPath: string;
-	progressPath: string;
-	currentTrackPath: string;
-}
-
 async function buildSlicePrompts(
 	ctx: PhaseContext,
 	def: SliceDefinition,
-	paths: SlicePaths,
+	sliceCtx: SliceExecutionContext,
 ): Promise<{ systemPrompt: string; prompt: string }> {
 	const built = await ctx.prompts.buildPrompt("slice-execution", {
 		slug: ctx.run.slug,
 		runId: ctx.runId,
 		taskDescription: ctx.run.taskDescription,
 		topLevelPhase: ctx.phase,
-		files: paths,
+		preReadContent: {
+			planDoc: sliceCtx.planDoc,
+			progressDoc: sliceCtx.progressDoc,
+			trackDoc: sliceCtx.trackDoc,
+		},
+		worktreeBoundary: {
+			worktreePath: sliceCtx.worktreePath,
+			planDocPath: sliceCtx.planDocPath,
+			progressDocPath: sliceCtx.progressDocPath,
+			trackDocPath: sliceCtx.trackDocPath,
+		},
 		slice: { index: def.index, name: def.name, dod: def.dod },
 		includeContext: true,
 	});
@@ -266,19 +274,39 @@ async function runSliceInWorktree(
 	ctx: PhaseContext,
 	def: SliceDefinition,
 	record: SliceRecord,
-	paths: { planPath: string; progressPath: string },
+	paths: { planPath: string; progressPath: string; trackPath: string },
 	worktreePath: string,
-	trackPath: string,
 ): Promise<SliceOutcome> {
 	await ctx.worktree.setup(worktreePath);
 
-	let prompts: { systemPrompt: string; prompt: string };
+	let sliceCtx: SliceExecutionContext;
 	try {
-		prompts = await buildSlicePrompts(ctx, def, {
+		const costSummary = ctx.state.getRunCostSummary(ctx.runId);
+		sliceCtx = await buildSliceExecutionContext({
 			planPath: paths.planPath,
 			progressPath: paths.progressPath,
-			currentTrackPath: trackPath,
+			trackPath: paths.trackPath,
+			implRelDir: ctx.config.implementationsDir,
+			slug: ctx.run.slug,
+			worktreePath,
+			cumulativeCostUsd: costSummary.totalCostUsd,
+			remainingBudgetUsd: null,
+			slice: { index: def.index, name: def.name },
 		});
+	} catch (error) {
+		const msg = `Failed to build slice context for slice ${def.index} (${def.name}): ${toErrorMessage(error)}`;
+		ctx.state.slices.update(record.id, {
+			status: "failed",
+			error: msg,
+			endedAt: new Date().toISOString(),
+		});
+		ctx.onEvent?.({ type: "slice_failed", runId: ctx.runId, sliceIndex: def.index, error: msg });
+		return { failure: makeFailedResult(msg), costUsd: 0, durationMs: 0 };
+	}
+
+	let prompts: { systemPrompt: string; prompt: string };
+	try {
+		prompts = await buildSlicePrompts(ctx, def, sliceCtx);
 	} catch (error) {
 		const msg = `Failed to build prompt for slice ${def.index} (${def.name}): ${toErrorMessage(error)}`;
 		ctx.state.slices.update(record.id, {
@@ -316,6 +344,7 @@ async function runSingleSlice(
 	def: SliceDefinition,
 	record: SliceRecord,
 	paths: { planPath: string; progressPath: string; tracksDir: string },
+	baseBranch: string,
 ): Promise<SliceOutcome> {
 	// Locate track file before creating the worktree so we fail fast without
 	// leaving a stale worktree behind.
@@ -337,7 +366,7 @@ async function runSingleSlice(
 			runId: ctx.runId,
 			slug: ctx.run.slug,
 			sliceIndex: def.index,
-			baseBranch: ctx.run.baseBranch,
+			baseBranch,
 		});
 	} catch (error) {
 		const msg = `Failed to create worktree for slice ${def.index} (${def.name}): ${toErrorMessage(error)}`;
@@ -351,7 +380,7 @@ async function runSingleSlice(
 	}
 
 	try {
-		return await runSliceInWorktree(ctx, def, record, paths, worktreePath, trackPath);
+		return await runSliceInWorktree(ctx, def, record, { ...paths, trackPath }, worktreePath);
 	} finally {
 		try {
 			await ctx.worktree.remove(worktreePath);
@@ -375,9 +404,12 @@ async function executeSlicesSequentially(
 	sliceDefs: SliceDefinition[],
 	paths: { planPath: string; progressPath: string; tracksDir: string },
 ): Promise<SliceLoopResult> {
+	const slug = ctx.run.slug;
 	let totalCostUsd = 0;
 	let totalDurationMs = 0;
 	let lastExecutedIndex = -1;
+	// Start from workingBranch (resume case) or baseBranch (fresh run).
+	let currentBranch = ctx.run.workingBranch ?? ctx.run.baseBranch;
 
 	for (const def of sliceDefs) {
 		const record = ctx.state.slices.getByIndex(ctx.runId, def.index);
@@ -389,6 +421,8 @@ async function executeSlicesSequentially(
 			totalCostUsd += record.costUsd ?? 0;
 			totalDurationMs += record.durationMs ?? 0;
 			lastExecutedIndex = def.index;
+			// Advance currentBranch so the next pending slice branches from the right place.
+			currentBranch = `task/${slug}-${def.index}`;
 			continue;
 		}
 
@@ -411,7 +445,7 @@ async function executeSlicesSequentially(
 			sliceName: def.name,
 		});
 
-		const outcome = await runSingleSlice(ctx, def, record, paths);
+		const outcome = await runSingleSlice(ctx, def, record, paths, currentBranch);
 
 		if (outcome.failure) {
 			const failure = {
@@ -425,6 +459,9 @@ async function executeSlicesSequentially(
 		totalCostUsd += outcome.costUsd;
 		totalDurationMs += outcome.durationMs;
 		lastExecutedIndex = def.index;
+		// Update currentBranch and persist per-slice so resume picks up from the right place.
+		currentBranch = `task/${slug}-${def.index}`;
+		ctx.state.runs.update(ctx.runId, { workingBranch: currentBranch });
 	}
 
 	return { costUsd: totalCostUsd, durationMs: totalDurationMs, lastExecutedIndex };
@@ -475,12 +512,6 @@ export async function runExecutePhase(ctx: PhaseContext): Promise<PhaseResult> {
 
 	if (loop.failure) {
 		return loop.failure;
-	}
-
-	if (loop.lastExecutedIndex >= 0) {
-		ctx.state.runs.update(ctx.runId, {
-			workingBranch: `task/${slug}-${loop.lastExecutedIndex}`,
-		});
 	}
 
 	return {
