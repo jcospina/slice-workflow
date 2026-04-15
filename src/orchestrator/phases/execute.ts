@@ -59,6 +59,19 @@ function getAllowedToolsForRuntime(
 	return undefined;
 }
 
+function getMaxTurnsForRuntime(
+	provider: PhaseContext["runtime"]["provider"],
+	config: PhaseContext["config"],
+): number | undefined {
+	if (provider === "claude-code") {
+		return config.providers.claudeCode.maxTurns;
+	}
+	if (provider === "opencode") {
+		return config.providers.opencode.maxTurns;
+	}
+	return undefined;
+}
+
 // --- Plan document parser ---
 
 /**
@@ -170,6 +183,7 @@ async function buildSlicePrompts(
 	ctx: PhaseContext,
 	def: SliceDefinition,
 	paths: SlicePaths,
+	worktreePath: string,
 ): Promise<{ systemPrompt: string; prompt: string }> {
 	const built = await ctx.prompts.buildPrompt("slice-execution", {
 		slug: ctx.run.slug,
@@ -182,8 +196,14 @@ async function buildSlicePrompts(
 	});
 
 	const prompt = [built.layers.context, built.layers.task].filter(Boolean).join("\n\n");
+	const systemPrompt = [
+		built.layers.system,
+		`Write boundary: confine all file reads and writes to '${worktreePath}'. Do not access paths outside this directory.`,
+	]
+		.filter(Boolean)
+		.join("\n");
 
-	return { systemPrompt: built.layers.system, prompt };
+	return { systemPrompt, prompt };
 }
 
 // --- Single slice execution ---
@@ -274,11 +294,16 @@ async function runSliceInWorktree(
 
 	let prompts: { systemPrompt: string; prompt: string };
 	try {
-		prompts = await buildSlicePrompts(ctx, def, {
-			planPath: paths.planPath,
-			progressPath: paths.progressPath,
-			currentTrackPath: trackPath,
-		});
+		prompts = await buildSlicePrompts(
+			ctx,
+			def,
+			{
+				planPath: paths.planPath,
+				progressPath: paths.progressPath,
+				currentTrackPath: trackPath,
+			},
+			worktreePath,
+		);
 	} catch (error) {
 		const msg = `Failed to build prompt for slice ${def.index} (${def.name}): ${toErrorMessage(error)}`;
 		ctx.state.slices.update(record.id, {
@@ -295,6 +320,7 @@ async function runSliceInWorktree(
 		systemPrompt: prompts.systemPrompt,
 		prompt: prompts.prompt,
 		allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
+		maxTurns: getMaxTurnsForRuntime(ctx.runtime.provider, ctx.config),
 		onProgress: () => {
 			// Phase-local. Top-level orchestrator events do not currently include a
 			// progress event contract for slice agents.

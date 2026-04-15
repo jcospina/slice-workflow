@@ -21,6 +21,14 @@ const claudeCodeProviderSchema = z.object({
 		.describe(
 			"Claude CLI executable name or path (e.g. 'claude', 'klaude', '/usr/local/bin/claude')",
 		),
+	maxTurns: z
+		.number()
+		.int()
+		.min(1)
+		.optional()
+		.describe(
+			"Maximum number of agentic turns before forcing a stop (passed as --max-turns to Claude CLI)",
+		),
 });
 
 const opencodeProviderSchema = z.object({
@@ -33,6 +41,14 @@ const opencodeProviderSchema = z.object({
 		.optional()
 		.describe(
 			"OpenCode CLI executable name or path (must be installed/runnable, e.g. 'opencode', '/usr/local/bin/opencode')",
+		),
+	maxTurns: z
+		.number()
+		.int()
+		.min(1)
+		.optional()
+		.describe(
+			"Maximum number of agentic turns before forcing a stop (informational; not enforced via OpenCode SDK)",
 		),
 });
 
