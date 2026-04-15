@@ -29,6 +29,8 @@ export interface WorktreeManager {
 		slug: string;
 		sliceIndex: number;
 		baseBranch: string;
+		/** Attach to an existing slice branch instead of creating a new one. */
+		reuseExistingBranch?: boolean;
 	}): Promise<string>;
 
 	/** Install dependencies and copy environment files in the worktree. */
@@ -50,6 +52,12 @@ export interface ApprovalRequest {
 	artifactPath: string;
 	/** Text content to send to messaging channels. */
 	content: string;
+	/** Distinguishes top-level phase gates from per-slice execute gates. */
+	approvalType?: "phase" | "slice";
+	/** Populated for execute slice approval gates. */
+	sliceIndex?: number;
+	/** Populated for execute slice approval gates. */
+	sliceName?: string;
 }
 
 export interface ApprovalResponse {
@@ -134,8 +142,29 @@ export type OrchestratorEvent =
 			decision: ApprovalDecision;
 	  }
 	| { type: "slice_started"; runId: string; sliceIndex: number; sliceName: string }
-	| { type: "slice_completed"; runId: string; sliceIndex: number; costUsd: number | null }
-	| { type: "slice_failed"; runId: string; sliceIndex: number; error: string }
+	| {
+			type: "slice_completed";
+			runId: string;
+			sliceIndex: number;
+			sliceName: string;
+			costUsd: number | null;
+			durationMs: number | null;
+	  }
+	| { type: "slice_failed"; runId: string; sliceIndex: number; sliceName: string; error: string }
+	| {
+			type: "slice_approval_requested";
+			runId: string;
+			sliceIndex: number;
+			sliceName: string;
+			artifactPath: string;
+	  }
+	| {
+			type: "slice_approval_resolved";
+			runId: string;
+			sliceIndex: number;
+			sliceName: string;
+			decision: ApprovalDecision;
+	  }
 	| {
 			type: "slice_turn_warning";
 			runId: string;

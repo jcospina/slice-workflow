@@ -1,7 +1,7 @@
 /**
  * Payload contract tests for SLICEWORKF-21.
  *
- * Verify HookInput payload shapes for all currently-emitted events.
+ * Verify HookInput payload shapes for currently-emitted core lifecycle events.
  * This acts as a living spec and remains fully isolated from sample adapter
  * scripts under docs/hooks/.
  */
@@ -16,7 +16,7 @@ import type { HookInput } from "./types";
 const ISO_8601_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 // ---------------------------------------------------------------------------
-// Canonical HookInput fixtures for the 8 currently-emitted events
+// Canonical HookInput fixtures for representative emitted events
 // ---------------------------------------------------------------------------
 
 const EMITTED_FIXTURES: HookInput[] = [
@@ -128,13 +128,13 @@ describe("HookInput payload contracts", () => {
 		expect(["approved", "request_changes", "rejected"]).toContain(fixture?.payload.decision);
 	});
 
-	it("all 8 emitted fixtures have an ISO 8601 timestamp", () => {
+	it("all emitted fixtures have an ISO 8601 timestamp", () => {
 		for (const fixture of EMITTED_FIXTURES) {
 			expect(fixture.timestamp).toMatch(ISO_8601_PATTERN);
 		}
 	});
 
-	it("all 8 emitted fixtures have a runId string", () => {
+	it("all emitted fixtures have a runId string", () => {
 		for (const fixture of EMITTED_FIXTURES) {
 			expect(typeof fixture.runId).toBe("string");
 		}

@@ -1,10 +1,10 @@
 import { copyFile, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentRunResult } from "../../runtime/types";
-import type { SliceRecord, WorkflowRun } from "../../state/types";
-import { findTrackFile, parsePlanSlices, parseReviewOutput, runExecutePhase } from "./execute";
-import type { OrchestratorEvent, PhaseContext } from "./types";
+import type { AgentRunResult } from "../../../runtime/types";
+import type { SliceRecord, WorkflowRun } from "../../../state/types";
+import type { OrchestratorEvent, PhaseContext } from "../types";
+import { findTrackFile, parsePlanSlices, parseReviewOutput, runExecutePhase } from "./index";
 
 // --- Mock node:fs/promises ---
 
@@ -95,10 +95,12 @@ function makePhaseContext(overrides?: {
 	stateSlices?: Partial<PhaseContext["state"]["slices"]>;
 	stateRuns?: Partial<PhaseContext["state"]["runs"]>;
 	stateReviews?: Partial<PhaseContext["state"]["reviews"]>;
+	messaging?: Partial<PhaseContext["messaging"]>;
 	prompts?: Partial<PhaseContext["prompts"]>;
 	onEvent?: PhaseContext["onEvent"];
 	workingBranch?: string | null;
 	reviewEnabled?: boolean;
+	sliceExecution?: "autonomous" | "gated";
 }): PhaseContext {
 	const run: WorkflowRun = {
 		id: "run-1",
@@ -119,6 +121,7 @@ function makePhaseContext(overrides?: {
 		config: {
 			implementationsDir: "implementations",
 			providers: { claudeCode: {}, opencode: {} },
+			sliceExecution: overrides?.sliceExecution ?? "autonomous",
 			execution: { maxTurnsPerSlice: 50, maxTurnsPerReview: 20 },
 			review: {
 				enabled: overrides?.reviewEnabled ?? false,
@@ -164,7 +167,16 @@ function makePhaseContext(overrides?: {
 			prune: vi.fn().mockResolvedValue(undefined),
 			...overrides?.worktree,
 		},
-		messaging: {} as PhaseContext["messaging"],
+		messaging: {
+			requestApproval: vi.fn().mockResolvedValue({
+				decision: "approved",
+				feedback: null,
+				respondedAt: new Date().toISOString(),
+				channel: "tui",
+			}),
+			close: vi.fn().mockResolvedValue(undefined),
+			...overrides?.messaging,
+		},
 		prompts: {
 			buildPrompt: vi.fn().mockResolvedValue({
 				phase: "slice-execution",
@@ -1294,6 +1306,223 @@ Definition of Done:
 			"run-1",
 			expect.objectContaining({ workingBranch: "task/demo-slug-0" }),
 		);
+	});
+
+	describe("gated slice execution", () => {
+		it("requests slice approval in gated mode and emits approval events", async () => {
+			const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+			mockReadFile.mockResolvedValue(singleSlicePlan);
+			mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+				ReturnType<typeof readdir>
+			>);
+
+			const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+			const events: OrchestratorEvent[] = [];
+			const requestApproval = vi.fn().mockResolvedValue({
+				decision: "approved",
+				feedback: null,
+				respondedAt: new Date().toISOString(),
+				channel: "tui",
+			});
+
+			const ctx = makePhaseContext({
+				sliceExecution: "gated",
+				messaging: { requestApproval },
+				stateSlices: {
+					getByIndex: vi.fn().mockReturnValue(sliceRecord),
+					create: vi.fn().mockReturnValue(sliceRecord),
+					update: vi.fn(),
+					listByRun: vi.fn().mockReturnValue([]),
+				},
+				stateRuns: { update: vi.fn() },
+				onEvent: (event) => events.push(event),
+			});
+
+			const result = await runExecutePhase(ctx);
+			expect(result.status).toBe("completed");
+			expect(requestApproval).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "execute",
+					approvalType: "slice",
+					sliceIndex: 0,
+					sliceName: "Foundation",
+				}),
+			);
+			expect(events.some((event) => event.type === "slice_approval_requested")).toBe(true);
+			expect(events.some((event) => event.type === "slice_approval_resolved")).toBe(true);
+			expect(vi.mocked(ctx.state.runs.update)).toHaveBeenCalledWith(
+				"run-1",
+				expect.objectContaining({ status: "awaiting_approval" }),
+			);
+		});
+
+		it("runs a new same-worktree agent pass when approval returns request_changes", async () => {
+			const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+			mockReadFile.mockResolvedValue(singleSlicePlan);
+			mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+				ReturnType<typeof readdir>
+			>);
+
+			const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+			const runtimeRun = vi
+				.fn()
+				.mockResolvedValueOnce(makeSuccessResult({ sessionId: "sess-initial" }))
+				.mockResolvedValueOnce(makeSuccessResult({ sessionId: "sess-fix" }));
+			const requestApproval = vi
+				.fn()
+				.mockResolvedValueOnce({
+					decision: "request_changes",
+					feedback: "Please add stricter validation tests.",
+					respondedAt: new Date().toISOString(),
+					channel: "tui",
+				})
+				.mockResolvedValueOnce({
+					decision: "approved",
+					feedback: null,
+					respondedAt: new Date().toISOString(),
+					channel: "tui",
+				});
+
+			const ctx = makePhaseContext({
+				sliceExecution: "gated",
+				reviewEnabled: false,
+				runtime: { run: runtimeRun },
+				messaging: { requestApproval },
+				stateSlices: {
+					getByIndex: vi.fn().mockReturnValue(sliceRecord),
+					create: vi.fn().mockReturnValue(sliceRecord),
+					update: vi.fn(),
+					listByRun: vi.fn().mockReturnValue([]),
+				},
+				stateRuns: { update: vi.fn() },
+			});
+
+			const result = await runExecutePhase(ctx);
+			expect(result.status).toBe("completed");
+			expect(requestApproval).toHaveBeenCalledTimes(2);
+			expect(runtimeRun).toHaveBeenCalledTimes(2);
+			expect(runtimeRun.mock.calls[1]?.[0]?.cwd).toBe("/fake/worktree");
+		});
+
+		it("resumes awaiting_approval request_changes on existing branch and preserves feedback", async () => {
+			const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+			mockReadFile.mockResolvedValue(singleSlicePlan);
+			mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+				ReturnType<typeof readdir>
+			>);
+
+			let sliceRecord = makeSliceRecord({
+				id: "slice-1",
+				index: 0,
+				name: "Foundation",
+				status: "awaiting_approval",
+				costUsd: 0.5,
+				durationMs: 300,
+			});
+			const runtimeRun = vi.fn().mockResolvedValue(makeSuccessResult({ sessionId: "sess-fix" }));
+			const requestApproval = vi
+				.fn()
+				.mockResolvedValueOnce({
+					decision: "request_changes",
+					feedback: "Please add stricter validation tests.",
+					respondedAt: new Date().toISOString(),
+					channel: "tui",
+				})
+				.mockResolvedValueOnce({
+					decision: "approved",
+					feedback: null,
+					respondedAt: new Date().toISOString(),
+					channel: "tui",
+				});
+			const buildPromptSpy = vi.fn().mockResolvedValue({
+				phase: "slice-fix",
+				layers: { system: "sys", context: "ctx", task: "tsk" },
+				composedPrompt: "",
+			});
+			const createSpy = vi.fn().mockResolvedValue("/fake/worktree");
+			const updateSlice = vi
+				.fn()
+				.mockImplementation((_id: string, patch: Record<string, unknown>) => {
+					sliceRecord = { ...sliceRecord, ...patch };
+				});
+
+			const ctx = makePhaseContext({
+				sliceExecution: "gated",
+				reviewEnabled: false,
+				workingBranch: "task/demo-slug-0",
+				runtime: { run: runtimeRun },
+				worktree: { create: createSpy },
+				prompts: { buildPrompt: buildPromptSpy },
+				messaging: { requestApproval },
+				stateSlices: {
+					getByIndex: vi.fn().mockImplementation(() => sliceRecord),
+					create: vi.fn().mockReturnValue(sliceRecord),
+					update: updateSlice,
+					listByRun: vi.fn().mockReturnValue([]),
+				},
+				stateRuns: { update: vi.fn() },
+			});
+
+			const result = await runExecutePhase(ctx);
+			expect(result.status).toBe("completed");
+			expect(requestApproval).toHaveBeenCalledTimes(2);
+			expect(runtimeRun).toHaveBeenCalledTimes(1);
+			expect(createSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					sliceIndex: 0,
+					baseBranch: "task/demo-slug-0",
+					reuseExistingBranch: true,
+				}),
+			);
+
+			const promptPhases = buildPromptSpy.mock.calls.map(([phase]) => phase);
+			expect(promptPhases).toContain("slice-fix");
+			expect(promptPhases).not.toContain("slice-execution");
+			expect(buildPromptSpy).toHaveBeenCalledWith(
+				"slice-fix",
+				expect.objectContaining({
+					review: expect.objectContaining({
+						findings: [
+							expect.objectContaining({
+								body: "Please add stricter validation tests.",
+							}),
+						],
+					}),
+				}),
+			);
+		});
+
+		it("fails the phase when slice approval is rejected", async () => {
+			const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+			mockReadFile.mockResolvedValue(singleSlicePlan);
+			mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+				ReturnType<typeof readdir>
+			>);
+
+			const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+			const requestApproval = vi.fn().mockResolvedValue({
+				decision: "rejected",
+				feedback: "Do not proceed with this slice.",
+				respondedAt: new Date().toISOString(),
+				channel: "tui",
+			});
+
+			const ctx = makePhaseContext({
+				sliceExecution: "gated",
+				messaging: { requestApproval },
+				stateSlices: {
+					getByIndex: vi.fn().mockReturnValue(sliceRecord),
+					create: vi.fn().mockReturnValue(sliceRecord),
+					update: vi.fn(),
+					listByRun: vi.fn().mockReturnValue([]),
+				},
+				stateRuns: { update: vi.fn() },
+			});
+
+			const result = await runExecutePhase(ctx);
+			expect(result.status).toBe("failed");
+			expect(result.error).toContain("Do not proceed with this slice.");
+		});
 	});
 });
 

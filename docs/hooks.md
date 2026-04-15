@@ -43,11 +43,13 @@ Defaults:
 | `phase:failed` | ✅ | `phase: string`, `error: string` |
 | `approval:requested` | ✅ | `phase: string`, `artifactPath: string` |
 | `approval:received` | ✅ | `phase: string`, `decision: "approved" \| "request_changes" \| "rejected"`, `feedback?: string` |
-| `slice:start` | ⏳ planned | `sliceIndex: number`, `sliceName: string` |
-| `slice:complete` | ⏳ planned | `sliceIndex: number`, `sliceName: string`, `costUsd: number`, `durationMs: number` |
-| `slice:failed` | ⏳ planned | `sliceIndex: number`, `sliceName: string`, `error: string` |
-| `review:start` | ⏳ planned | `sliceIndex: number`, `iteration: number` |
-| `review:verdict` | ⏳ planned | `sliceIndex: number`, `iteration: number`, `verdict: "PASS" \| "FAIL"`, `findings: object[]` |
+| `slice:start` | ✅ | `sliceIndex: number`, `sliceName: string` |
+| `slice:complete` | ✅ | `sliceIndex: number`, `sliceName: string`, `costUsd: number`, `durationMs: number` |
+| `slice:failed` | ✅ | `sliceIndex: number`, `sliceName: string`, `error: string` |
+| `slice:approval_requested` | ✅ | `sliceIndex: number`, `sliceName: string`, `artifactPath: string` |
+| `slice:approval_received` | ✅ | `sliceIndex: number`, `sliceName: string`, `decision: "approved" \| "request_changes" \| "rejected"` |
+| `review:start` | ✅ | `sliceIndex: number`, `iteration: number` |
+| `review:verdict` | ✅ | `sliceIndex: number`, `iteration: number`, `verdict: "PASS" \| "FAIL" \| "PARTIAL"` |
 
 ## Hook input/output schema
 

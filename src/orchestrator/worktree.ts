@@ -109,8 +109,9 @@ export class GitWorktreeManager implements WorktreeManager {
 		slug: string;
 		sliceIndex: number;
 		baseBranch: string;
+		reuseExistingBranch?: boolean;
 	}): Promise<string> {
-		const { slug, sliceIndex, baseBranch } = options;
+		const { slug, sliceIndex, baseBranch, reuseExistingBranch = false } = options;
 		const branch = `task/${slug}-${sliceIndex}`;
 		const relativeDir = `.trees/${slug}-${sliceIndex}`;
 		const worktreePath = resolve(this.projectCwd, relativeDir);
@@ -119,11 +120,10 @@ export class GitWorktreeManager implements WorktreeManager {
 
 		let result: { stdout: string; stderr: string; exitCode: number | null };
 		try {
-			result = await this.runCommand(
-				"git",
-				["worktree", "add", "-b", branch, relativeDir, baseBranch],
-				this.projectCwd,
-			);
+			const args = reuseExistingBranch
+				? ["worktree", "add", relativeDir, branch]
+				: ["worktree", "add", "-b", branch, relativeDir, baseBranch];
+			result = await this.runCommand("git", args, this.projectCwd);
 		} catch (error) {
 			// runCommand rejects only on launch failure (binary not found, permission denied).
 			throw new WorktreeError(`Failed to create worktree '${worktreePath}': ${toMessage(error)}`, {

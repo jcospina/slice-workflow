@@ -11,6 +11,8 @@ export const HOOK_EVENTS = [
 	"slice:start",
 	"slice:complete",
 	"slice:failed",
+	"slice:approval_requested",
+	"slice:approval_received",
 	"review:start",
 	"review:verdict",
 	"approval:requested",
