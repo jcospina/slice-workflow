@@ -75,6 +75,13 @@ export class ReviewResultRepo {
 		return row ? mapRow(row) : undefined;
 	}
 
+	countBySlice(runId: string, sliceIndex: number): number {
+		const row = this.db
+			.prepare("SELECT COUNT(*) as count FROM review_results WHERE run_id = ? AND slice_index = ?")
+			.get(runId, sliceIndex) as { count: number };
+		return row.count;
+	}
+
 	listByRun(runId: string): ReviewResult[] {
 		const rows = this.db
 			.prepare("SELECT * FROM review_results WHERE run_id = ? ORDER BY slice_index, iteration")

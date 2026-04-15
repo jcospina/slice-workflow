@@ -14,7 +14,7 @@ export type PhaseStatus = "pending" | "running" | "completed" | "failed" | "skip
 
 export type SliceStatus = "pending" | "running" | "completed" | "failed" | "awaiting_approval";
 
-export type ReviewVerdict = "PASS" | "FAIL";
+export type ReviewVerdict = "PASS" | "FAIL" | "PARTIAL";
 
 export type NotificationChannel = "slack" | "telegram" | "tui";
 
