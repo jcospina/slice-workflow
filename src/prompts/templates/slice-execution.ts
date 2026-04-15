@@ -6,6 +6,17 @@ export function renderSliceExecutionTemplate(input: PromptBuildInput): PromptTem
 			? `Slice ${String(input.slice.index).padStart(2, "0")} - ${input.slice.name}`
 			: "Current slice";
 
+	const boundaryLines = input.worktreeBoundary
+		? [
+				"",
+				"Worktree boundary:",
+				`- You are operating in worktree: ${input.worktreeBoundary.worktreePath}`,
+				"- You MUST NOT modify files outside this worktree.",
+				`- You MUST NOT modify these context files directly: ${input.worktreeBoundary.planDocPath}, ${input.worktreeBoundary.trackDocPath}.`,
+				`- You may append observations to ${input.worktreeBoundary.progressDocPath} but must not overwrite it.`,
+			]
+		: [];
+
 	return {
 		system: [
 			"Role: Slice implementer.",
@@ -18,6 +29,7 @@ export function renderSliceExecutionTemplate(input: PromptBuildInput): PromptTem
 			"- Previous tracks may contain stale context from earlier slices.",
 			"- Trust PROGRESS.md for accumulated decisions and the codebase for current state.",
 			"- Task cannot be considered done if project guardrails fail (i.e. lint, typecheck, build). Make sure you run the correct verification commands before marking the slice as done.",
+			...boundaryLines,
 		].join("\n"),
 		task: [
 			`Implement ${sliceLabel}.`,

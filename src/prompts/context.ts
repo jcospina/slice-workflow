@@ -66,6 +66,40 @@ export async function buildContextBlock(
 	return { text, charCount, maxChars };
 }
 
+export function buildContextBlockFromContent(
+	content: { planDoc: string; progressDoc: string; trackDoc: string },
+	maxChars?: number,
+): ContextBlockResult {
+	const max = maxChars ?? DEFAULT_CONTEXT_BUDGET_CHARS;
+
+	const sections = [
+		"Context Rules:",
+		"- This block contains exactly three files: plan doc, PROGRESS.md, and current track file.",
+		"- Do not read previous track files for historical context; use PROGRESS.md for accumulated decisions.",
+		"",
+		"=== PLAN DOCUMENT ===",
+		content.planDoc,
+		"=== END PLAN DOCUMENT ===",
+		"",
+		"=== PROGRESS DOCUMENT ===",
+		content.progressDoc,
+		"=== END PROGRESS DOCUMENT ===",
+		"",
+		"=== CURRENT TRACK FILE ===",
+		content.trackDoc,
+		"=== END CURRENT TRACK FILE ===",
+	];
+
+	const text = sections.join("\n");
+	const charCount = text.length;
+
+	if (charCount > max) {
+		throw new ContextBudgetExceededError(max, charCount);
+	}
+
+	return { text, charCount, maxChars: max };
+}
+
 async function readRequiredFile(path: string, label: string): Promise<string> {
 	try {
 		return await readFile(path, "utf-8");

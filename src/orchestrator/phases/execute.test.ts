@@ -95,6 +95,7 @@ function makePhaseContext(overrides?: {
 	stateRuns?: Partial<PhaseContext["state"]["runs"]>;
 	prompts?: Partial<PhaseContext["prompts"]>;
 	onEvent?: PhaseContext["onEvent"];
+	workingBranch?: string | null;
 }): PhaseContext {
 	const run: WorkflowRun = {
 		id: "run-1",
@@ -103,7 +104,7 @@ function makePhaseContext(overrides?: {
 		status: "running",
 		currentPhase: "execute",
 		baseBranch: "main",
-		workingBranch: null,
+		workingBranch: overrides?.workingBranch ?? null,
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
 	};
@@ -134,6 +135,12 @@ function makePhaseContext(overrides?: {
 				update: vi.fn(),
 				...overrides?.stateRuns,
 			},
+			getRunCostSummary: vi.fn().mockReturnValue({
+				totalCostUsd: 0,
+				totalDurationMs: 0,
+				slicesCompleted: 0,
+				slicesTotal: 0,
+			}),
 		} as unknown as PhaseContext["state"],
 		worktree: {
 			create: vi.fn().mockResolvedValue("/fake/worktree"),
@@ -286,7 +293,6 @@ describe("findTrackFile", () => {
 
 describe("runExecutePhase", () => {
 	const planPath = "/project/implementations/demo-slug/demo-slug.md";
-	const tracksDir = "/project/implementations/demo-slug/tracks";
 
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -445,38 +451,9 @@ Definition of Done:
 
 		expect(runSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
-				systemPrompt:
-					"System instructions\nWrite boundary: confine all file reads and writes to '/fake/worktree'. Do not access paths outside this directory.",
+				systemPrompt: "System instructions",
 				prompt: "Context block\n\nTask instructions",
 			}),
-		);
-	});
-
-	it("appends worktree write boundary to system prompt", async () => {
-		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
-		mockReadFile.mockResolvedValue(singleSlicePlan);
-		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
-			ReturnType<typeof readdir>
-		>);
-
-		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
-		const runSpy = vi.fn().mockResolvedValue(makeSuccessResult());
-
-		const ctx = makePhaseContext({
-			runtime: { run: runSpy },
-			stateSlices: {
-				getByIndex: vi.fn().mockReturnValue(sliceRecord),
-				create: vi.fn().mockReturnValue(sliceRecord),
-				update: vi.fn(),
-				listByRun: vi.fn().mockReturnValue([]),
-			},
-		});
-
-		await runExecutePhase(ctx);
-
-		const call = runSpy.mock.calls[0][0] as { systemPrompt: string };
-		expect(call.systemPrompt).toContain(
-			"Write boundary: confine all file reads and writes to '/fake/worktree'.",
 		);
 	});
 
@@ -564,7 +541,7 @@ Definition of Done:
 		expect(runSpy).toHaveBeenCalledWith(expect.objectContaining({ maxTurns: undefined }));
 	});
 
-	it("updates workingBranch in runs after all slices complete", async () => {
+	it("updates workingBranch per-slice (not only at end)", async () => {
 		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
 		mockReadFile.mockResolvedValue(singleSlicePlan);
 		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
@@ -586,6 +563,7 @@ Definition of Done:
 
 		await runExecutePhase(ctx);
 
+		// workingBranch is now updated immediately after each slice completes
 		expect(runsUpdateSpy).toHaveBeenCalledWith(
 			"run-1",
 			expect.objectContaining({ workingBranch: "task/demo-slug-0" }),
@@ -970,8 +948,8 @@ Definition of Done:
 	// workingBranch not set when no slices were executed
 	// ---------------------------------------------------------------------------
 
-	it("does not update workingBranch when no slices were executed", async () => {
-		// All slices already completed — nothing to run
+	it("does not update workingBranch when all slices were already completed (skipped)", async () => {
+		// All slices already completed — nothing to run so runs.update is never called
 		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
 		mockReadFile.mockResolvedValue(singleSlicePlan);
 
@@ -997,19 +975,15 @@ Definition of Done:
 
 		await runExecutePhase(ctx);
 
-		// workingBranch should still be updated (lastExecutedIndex was set while skipping completed)
-		// because a completed slice was encountered
-		expect(runsUpdateSpy).toHaveBeenCalledWith(
-			"run-1",
-			expect.objectContaining({ workingBranch: "task/demo-slug-0" }),
-		);
+		// workingBranch is updated per-slice when agent runs; skipped completed slices do not call runs.update
+		expect(runsUpdateSpy).not.toHaveBeenCalled();
 	});
 
 	// ---------------------------------------------------------------------------
 	// Prompt building uses slice-execution template with all fields
 	// ---------------------------------------------------------------------------
 
-	it("calls buildPrompt with correct slice context and file paths", async () => {
+	it("calls buildPrompt with preReadContent and worktreeBoundary instead of files", async () => {
 		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Base files created.";
 		mockReadFile.mockResolvedValue(singleSlicePlan);
 		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
@@ -1041,10 +1015,16 @@ Definition of Done:
 				slug: "demo-slug",
 				runId: "run-1",
 				includeContext: true,
-				files: expect.objectContaining({
-					planPath: planPath,
-					progressPath: expect.stringContaining("PROGRESS.md"),
-					currentTrackPath: join(tracksDir, "00-foundation.md"),
+				preReadContent: expect.objectContaining({
+					planDoc: expect.any(String),
+					progressDoc: expect.any(String),
+					trackDoc: expect.any(String),
+				}),
+				worktreeBoundary: expect.objectContaining({
+					worktreePath: "/fake/worktree",
+					planDocPath: "implementations/demo-slug/demo-slug.md",
+					progressDocPath: "implementations/demo-slug/PROGRESS.md",
+					trackDocPath: expect.stringContaining("00-foundation.md"),
 				}),
 				slice: expect.objectContaining({
 					index: 0,
@@ -1052,6 +1032,116 @@ Definition of Done:
 					dod: "- Base files created.",
 				}),
 			}),
+		);
+	});
+
+	it("passes baseBranch from workingBranch (resume) to worktree.create for second slice", async () => {
+		const twoPlan = `
+### Slice 00 - Foundation
+Definition of Done:
+- Done.
+
+### Slice 01 - Scaffold
+Definition of Done:
+- Done.
+`.trim();
+
+		mockReadFile.mockResolvedValue(twoPlan);
+		mockReaddir.mockResolvedValue(["00-foundation.md", "01-scaffold.md"] as unknown as Awaited<
+			ReturnType<typeof readdir>
+		>);
+
+		const completedRecord = makeSliceRecord({
+			id: "slice-0",
+			index: 0,
+			name: "Foundation",
+			status: "completed",
+			costUsd: 0.5,
+			durationMs: 1000,
+		});
+		const pendingRecord = makeSliceRecord({ id: "slice-1", index: 1, name: "Scaffold" });
+		const createSpy = vi.fn().mockResolvedValue("/fake/worktree");
+
+		const ctx = makePhaseContext({
+			worktree: { create: createSpy },
+			stateSlices: {
+				getByIndex: vi
+					.fn()
+					.mockImplementation((_runId: string, index: number) =>
+						index === 0 ? completedRecord : pendingRecord,
+					),
+				create: vi.fn(),
+				update: vi.fn(),
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+		});
+
+		await runExecutePhase(ctx);
+
+		// Slice 01 should branch from task/demo-slug-0 (the completed slice 0 branch)
+		expect(createSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				sliceIndex: 1,
+				baseBranch: "task/demo-slug-0",
+			}),
+		);
+	});
+
+	it("uses baseBranch (main) for the first slice when no workingBranch is set", async () => {
+		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+		mockReadFile.mockResolvedValue(singleSlicePlan);
+		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+			ReturnType<typeof readdir>
+		>);
+
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+		const createSpy = vi.fn().mockResolvedValue("/fake/worktree");
+
+		const ctx = makePhaseContext({
+			worktree: { create: createSpy },
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: vi.fn(),
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+		});
+
+		await runExecutePhase(ctx);
+
+		expect(createSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				sliceIndex: 0,
+				baseBranch: "main",
+			}),
+		);
+	});
+
+	it("updates workingBranch per-slice immediately after success", async () => {
+		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+		mockReadFile.mockResolvedValue(singleSlicePlan);
+		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+			ReturnType<typeof readdir>
+		>);
+
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+		const runsUpdateSpy = vi.fn();
+
+		const ctx = makePhaseContext({
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: vi.fn(),
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+			stateRuns: { update: runsUpdateSpy },
+		});
+
+		await runExecutePhase(ctx);
+
+		expect(runsUpdateSpy).toHaveBeenCalledWith(
+			"run-1",
+			expect.objectContaining({ workingBranch: "task/demo-slug-0" }),
 		);
 	});
 });

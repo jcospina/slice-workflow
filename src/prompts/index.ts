@@ -1,7 +1,11 @@
 import { join } from "node:path";
 import type { PhaseContext, PromptBuilder } from "../orchestrator/phases/types";
 import type { PhaseName } from "../state/types";
-import { type ContextBlockResult, buildContextBlock } from "./context";
+import {
+	type ContextBlockResult,
+	buildContextBlock,
+	buildContextBlockFromContent,
+} from "./context";
 import { renderTemplate } from "./templates";
 import type {
 	BuiltPrompt,
@@ -13,6 +17,7 @@ import type {
 export {
 	ContextBudgetExceededError,
 	buildContextBlock,
+	buildContextBlockFromContent,
 	type BuildContextBlockOptions,
 	type ContextBlockResult,
 } from "./context";
@@ -28,6 +33,7 @@ export {
 	type PromptTemplatePhase,
 	type ReviewFinding,
 	type ReviewSeverity,
+	type WorktreeBoundary,
 } from "./types";
 
 export function mapPhaseToTemplatePhase(phase: PhaseName): PromptTemplatePhase {
@@ -85,8 +91,14 @@ export class DefaultPromptBuilder implements PromptBuilder {
 			return { text: "", charCount: 0, maxChars: input.maxContextChars ?? 0 };
 		}
 
+		if (input.preReadContent) {
+			return buildContextBlockFromContent(input.preReadContent, input.maxContextChars);
+		}
+
 		if (!input.files) {
-			throw new Error("buildPrompt requires files (planPath, progressPath, currentTrackPath).");
+			throw new Error(
+				"buildPrompt requires either preReadContent or files (planPath, progressPath, currentTrackPath).",
+			);
 		}
 
 		return await buildContextBlock({

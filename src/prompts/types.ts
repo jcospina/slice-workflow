@@ -40,6 +40,13 @@ export interface PromptReviewContext {
 	findings?: ReviewFinding[];
 }
 
+export interface WorktreeBoundary {
+	worktreePath: string;
+	planDocPath: string;
+	progressDocPath: string;
+	trackDocPath: string;
+}
+
 export interface PromptBuildInput {
 	slug: string;
 	runId?: string;
@@ -50,6 +57,8 @@ export interface PromptBuildInput {
 	review?: PromptReviewContext;
 	maxContextChars?: number;
 	includeContext?: boolean;
+	worktreeBoundary?: WorktreeBoundary;
+	preReadContent?: { planDoc: string; progressDoc: string; trackDoc: string };
 }
 
 export interface PromptLayers {
