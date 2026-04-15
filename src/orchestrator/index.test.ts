@@ -70,6 +70,7 @@ const BASE_CONFIG = {
 	implementationsDir: "implementations",
 	approvalGates: { rfc: false, plan: false },
 	sliceExecution: "autonomous" as const,
+	execution: { maxTurnsPerSlice: 50, maxTurnsPerReview: 20 },
 	review: {
 		enabled: true,
 		maxIterations: 2,

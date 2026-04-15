@@ -55,6 +55,7 @@ export interface SliceRecord {
 	agentSessionId: string | null;
 	costUsd: number | null;
 	durationMs: number | null;
+	turnsUsed: number | null;
 	error: string | null;
 	startedAt: string | null;
 	endedAt: string | null;
@@ -114,7 +115,14 @@ export type UpdatePhaseRecord = Partial<
 export type UpdateSliceRecord = Partial<
 	Pick<
 		SliceRecord,
-		"status" | "agentSessionId" | "costUsd" | "durationMs" | "error" | "startedAt" | "endedAt"
+		| "status"
+		| "agentSessionId"
+		| "costUsd"
+		| "durationMs"
+		| "turnsUsed"
+		| "error"
+		| "startedAt"
+		| "endedAt"
 	>
 >;
 

@@ -63,17 +63,8 @@ function getAllowedToolsForRuntime(
 	return undefined;
 }
 
-function getMaxTurnsForRuntime(
-	provider: PhaseContext["runtime"]["provider"],
-	config: PhaseContext["config"],
-): number | undefined {
-	if (provider === "claude-code") {
-		return config.providers.claudeCode.maxTurns;
-	}
-	if (provider === "opencode") {
-		return config.providers.opencode.maxTurns;
-	}
-	return undefined;
+function getMaxTurnsForSlice(config: PhaseContext["config"]): number {
+	return config.execution.maxTurnsPerSlice;
 }
 
 // --- Plan document parser ---
@@ -141,6 +132,7 @@ function seedSliceRecords(ctx: PhaseContext, sliceDefs: SliceDefinition[]): void
 				agentSessionId: null,
 				costUsd: null,
 				durationMs: null,
+				turnsUsed: null,
 				error: null,
 				startedAt: null,
 				endedAt: null,
@@ -224,6 +216,7 @@ async function applyRunResult(
 	record: SliceRecord,
 	runResult: AgentRunResult,
 	worktreePath: string,
+	turnsUsed: number,
 ): Promise<SliceOutcome> {
 	const endedAt = new Date().toISOString();
 
@@ -234,6 +227,7 @@ async function applyRunResult(
 			agentSessionId: runResult.sessionId,
 			costUsd: runResult.costUsd,
 			durationMs: runResult.durationMs,
+			turnsUsed,
 			error: msg,
 			endedAt,
 		});
@@ -254,6 +248,7 @@ async function applyRunResult(
 		agentSessionId: runResult.sessionId,
 		costUsd: runResult.costUsd,
 		durationMs: runResult.durationMs,
+		turnsUsed,
 		endedAt,
 	});
 	ctx.onEvent?.({
@@ -330,19 +325,35 @@ async function runSliceInWorktree(
 		return { failure: makeFailedResult(msg), costUsd: 0, durationMs: 0 };
 	}
 
+	const maxTurns = getMaxTurnsForSlice(ctx.config);
+	let turnsUsed = 0;
+	let warnFired = false;
+	const warnThreshold = Math.floor(maxTurns * 0.8);
+
 	const runResult = await ctx.runtime.run({
 		cwd: worktreePath,
 		systemPrompt: prompts.systemPrompt,
 		prompt: prompts.prompt,
 		allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
-		maxTurns: getMaxTurnsForRuntime(ctx.runtime.provider, ctx.config),
-		onProgress: () => {
-			// Phase-local. Top-level orchestrator events do not currently include a
-			// progress event contract for slice agents.
+		maxTurns,
+		onProgress: (event) => {
+			if (event.type === "turn_complete") {
+				turnsUsed = event.turnNumber;
+				if (!warnFired && event.turnNumber > warnThreshold) {
+					warnFired = true;
+					ctx.onEvent?.({
+						type: "slice_turn_warning",
+						runId: ctx.runId,
+						sliceIndex: def.index,
+						turnNumber: event.turnNumber,
+						maxTurns,
+					});
+				}
+			}
 		},
 	});
 
-	return applyRunResult(ctx, def, record, runResult, worktreePath);
+	return applyRunResult(ctx, def, record, runResult, worktreePath, turnsUsed);
 }
 
 /**

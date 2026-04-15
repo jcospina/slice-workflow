@@ -117,7 +117,7 @@ describe("migrations", () => {
 		const row = sm.db.prepare("SELECT MAX(version) as v FROM _migrations").get() as {
 			v: number;
 		};
-		expect(row.v).toBe(1);
+		expect(row.v).toBe(2);
 	});
 });
 
@@ -379,6 +379,7 @@ describe("slice records", () => {
 			agentSessionId: null,
 			costUsd: null,
 			durationMs: null,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,
@@ -397,6 +398,7 @@ describe("slice records", () => {
 			agentSessionId: null,
 			costUsd: null,
 			durationMs: null,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,
@@ -409,6 +411,7 @@ describe("slice records", () => {
 			agentSessionId: null,
 			costUsd: null,
 			durationMs: null,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,
@@ -428,6 +431,7 @@ describe("slice records", () => {
 			agentSessionId: null,
 			costUsd: null,
 			durationMs: null,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,
@@ -446,6 +450,7 @@ describe("slice records", () => {
 			agentSessionId: null,
 			costUsd: null,
 			durationMs: null,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,
@@ -458,6 +463,7 @@ describe("slice records", () => {
 			agentSessionId: null,
 			costUsd: null,
 			durationMs: null,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,
@@ -470,6 +476,7 @@ describe("slice records", () => {
 			agentSessionId: null,
 			costUsd: null,
 			durationMs: null,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,
@@ -488,6 +495,7 @@ describe("slice records", () => {
 			agentSessionId: null,
 			costUsd: null,
 			durationMs: null,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,
@@ -500,6 +508,7 @@ describe("slice records", () => {
 			agentSessionId: null,
 			costUsd: null,
 			durationMs: null,
+			turnsUsed: null,
 			error: "compilation error",
 			startedAt: null,
 			endedAt: null,
@@ -519,6 +528,7 @@ describe("slice records", () => {
 			agentSessionId: null,
 			costUsd: null,
 			durationMs: null,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,
@@ -744,6 +754,7 @@ describe("resumability", () => {
 			agentSessionId: null,
 			costUsd: 1.0,
 			durationMs: 30000,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,
@@ -819,6 +830,7 @@ describe("cost summary", () => {
 			agentSessionId: null,
 			costUsd: 2.0,
 			durationMs: 60000,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,
@@ -831,6 +843,7 @@ describe("cost summary", () => {
 			agentSessionId: null,
 			costUsd: null,
 			durationMs: null,
+			turnsUsed: null,
 			error: null,
 			startedAt: null,
 			endedAt: null,

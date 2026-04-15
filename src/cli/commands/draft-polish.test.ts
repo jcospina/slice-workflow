@@ -40,6 +40,7 @@ describe("registerDraftPolishCommand", () => {
 			implementationsDir: "implementations",
 			approvalGates: { rfc: false, plan: false },
 			sliceExecution: "autonomous",
+			execution: { maxTurnsPerSlice: 50, maxTurnsPerReview: 20 },
 			review: {
 				enabled: true,
 				maxIterations: 2,

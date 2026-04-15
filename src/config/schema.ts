@@ -72,6 +72,21 @@ const approvalGatesSchema = z.object({
 		.describe("Whether to require human approval after the plan generation phase"),
 });
 
+const executionSchema = z.object({
+	maxTurnsPerSlice: z
+		.number()
+		.int()
+		.min(1)
+		.optional()
+		.describe("Maximum agentic turns per slice before forcing completion"),
+	maxTurnsPerReview: z
+		.number()
+		.int()
+		.min(1)
+		.optional()
+		.describe("Maximum agentic turns per review iteration"),
+});
+
 const reviewSchema = z.object({
 	enabled: z
 		.boolean()
@@ -219,6 +234,7 @@ export const projectConfigSchema = z
 		sliceExecution: sliceExecutionEnum
 			.optional()
 			.describe("Slice execution mode: 'autonomous' runs all slices, 'gated' pauses after each"),
+		execution: executionSchema.optional().describe("Execution limits for slice and review agents"),
 		review: reviewSchema
 			.optional()
 			.describe("Post-slice review loop configuration (evaluator-optimizer pattern)"),
@@ -272,6 +288,23 @@ export const resolvedConfigSchema = z
 		sliceExecution: sliceExecutionEnum
 			.default("autonomous")
 			.describe("Whether slices run continuously or pause for approval after each"),
+		execution: z
+			.object({
+				maxTurnsPerSlice: z
+					.number()
+					.int()
+					.min(1)
+					.default(50)
+					.describe("Maximum agentic turns per slice before forcing completion"),
+				maxTurnsPerReview: z
+					.number()
+					.int()
+					.min(1)
+					.default(20)
+					.describe("Maximum agentic turns per review iteration"),
+			})
+			.default({ maxTurnsPerSlice: 50, maxTurnsPerReview: 20 })
+			.describe("Resolved execution limits for slice and review agents"),
 		review: z
 			.object({
 				enabled: z

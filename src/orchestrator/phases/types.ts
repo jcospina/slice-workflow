@@ -130,6 +130,13 @@ export type OrchestratorEvent =
 	| { type: "slice_started"; runId: string; sliceIndex: number; sliceName: string }
 	| { type: "slice_completed"; runId: string; sliceIndex: number; costUsd: number | null }
 	| { type: "slice_failed"; runId: string; sliceIndex: number; error: string }
+	| {
+			type: "slice_turn_warning";
+			runId: string;
+			sliceIndex: number;
+			turnNumber: number;
+			maxTurns: number;
+	  }
 	| { type: "workflow_completed"; runId: string; totalCostUsd: number }
 	| { type: "workflow_failed"; runId: string; error: string };
 

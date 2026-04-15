@@ -74,6 +74,21 @@ describe("resolveConfig", () => {
 		expect(result.providers.opencode.maxTurns).toBeUndefined();
 	});
 
+	it("applies execution defaults when not configured", () => {
+		const result = resolveConfig({}, {});
+		expect(result.execution.maxTurnsPerSlice).toBe(50);
+		expect(result.execution.maxTurnsPerReview).toBe(20);
+	});
+
+	it("uses project execution values when configured", () => {
+		const project: ProjectConfig = {
+			execution: { maxTurnsPerSlice: 30, maxTurnsPerReview: 10 },
+		};
+		const result = resolveConfig({}, project);
+		expect(result.execution.maxTurnsPerSlice).toBe(30);
+		expect(result.execution.maxTurnsPerReview).toBe(10);
+	});
+
 	it("resolves hooks to an empty array when omitted", () => {
 		const result = resolveConfig({}, {});
 		expect(result.hooks).toEqual([]);
