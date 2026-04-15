@@ -59,6 +59,25 @@ describe("GitWorktreeManager", () => {
 			);
 		});
 
+		it("can attach to an existing slice branch when reusing branch state", async () => {
+			const runner = makeRunner();
+			const manager = new GitWorktreeManager(PROJECT_CWD, runner);
+
+			await manager.create({
+				runId: "run-1",
+				slug: "my-slug",
+				sliceIndex: 2,
+				baseBranch: "main",
+				reuseExistingBranch: true,
+			});
+
+			expect(runner).toHaveBeenCalledWith(
+				"git",
+				["worktree", "add", ".trees/my-slug-2", "task/my-slug-2"],
+				PROJECT_CWD,
+			);
+		});
+
 		it("throws WorktreeError with path context on non-zero exit", async () => {
 			const runner = makeRunner({ exitCode: 128, stderr: "fatal: branch already exists" });
 			const manager = new GitWorktreeManager(PROJECT_CWD, runner);

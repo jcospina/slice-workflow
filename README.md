@@ -62,15 +62,12 @@ For the `opencode` runtime, `slice` uses an SDK-first autonomous path (`@opencod
 
 ### Approval gates
 
-Approvals are channel-agnostic and return one `ApprovalResult` contract. Depending on your setup, they can come from:
-
-- **TUI** — Local fallback / default path
-- **Channel adapter** — Optional external integration wired via hooks
+Approvals are TUI-only. External hooks/adapters may receive informational notifications, but they do not provide approval decisions.
 
 ### Slice execution modes
 
 - **Autonomous** (default) — All slices run start-to-end, lifecycle notifications are emitted via hooks
-- **Gated** — Orchestrator pauses after each slice, waits for user approval via approval gateway (TUI and/or adapter)
+- **Gated** — Orchestrator pauses after each slice, emits informational approval-request hooks, and waits for a TUI decision (`approve`, `request_changes`, `reject`)
 
 ## Configuration
 

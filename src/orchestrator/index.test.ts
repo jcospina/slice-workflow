@@ -1202,6 +1202,88 @@ describe("run() - hook runner integration", () => {
 		state.close();
 	});
 
+	it("maps execute slice/review events to informational hook events", async () => {
+		const state = createInMemoryStateManager();
+		const mocks = makeMocks();
+		const { hookRunner, runMock } = makeHookRunner();
+
+		const executeHandler: PhaseHandler = vi.fn((ctx) => {
+			ctx.onEvent?.({
+				type: "slice_started",
+				runId: ctx.runId,
+				sliceIndex: 0,
+				sliceName: "Foundation",
+			});
+			ctx.onEvent?.({
+				type: "slice_completed",
+				runId: ctx.runId,
+				sliceIndex: 0,
+				sliceName: "Foundation",
+				costUsd: 0.12,
+				durationMs: 320,
+			});
+			ctx.onEvent?.({
+				type: "review_started",
+				runId: ctx.runId,
+				sliceIndex: 0,
+				iteration: 1,
+			});
+			ctx.onEvent?.({
+				type: "review_completed",
+				runId: ctx.runId,
+				sliceIndex: 0,
+				iteration: 1,
+				verdict: "PASS",
+			});
+			ctx.onEvent?.({
+				type: "slice_approval_requested",
+				runId: ctx.runId,
+				sliceIndex: 0,
+				sliceName: "Foundation",
+				artifactPath: "/project/implementations/demo/tracks/00-foundation.md",
+			});
+			ctx.onEvent?.({
+				type: "slice_approval_resolved",
+				runId: ctx.runId,
+				sliceIndex: 0,
+				sliceName: "Foundation",
+				decision: "approved",
+			});
+
+			return Promise.resolve({
+				status: "completed" as const,
+				agentSessionId: "sess-1",
+				costUsd: 0.12,
+				durationMs: 320,
+				error: null,
+				output: null,
+			});
+		});
+
+		const orch = new WorkflowOrchestrator({
+			config: BASE_CONFIG,
+			runtime: MOCK_RUNTIME,
+			state,
+			...mocks,
+			hookRunner,
+			projectCwd: "/project",
+			phases: { ...makeAllHandlers(), execute: executeHandler },
+		});
+
+		await orch.run("test");
+		await new Promise((r) => setTimeout(r, 0));
+
+		const events = (runMock.mock.calls as [HookInput][]).map(([i]) => i.event);
+		expect(events).toContain("slice:start");
+		expect(events).toContain("slice:complete");
+		expect(events).toContain("review:start");
+		expect(events).toContain("review:verdict");
+		expect(events).toContain("slice:approval_requested");
+		expect(events).toContain("slice:approval_received");
+
+		state.close();
+	});
+
 	it("cancels the run (no throw) when workflow:start hook returns continue: false", async () => {
 		const state = createInMemoryStateManager();
 		const mocks = makeMocks();

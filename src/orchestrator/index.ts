@@ -503,8 +503,69 @@ export class WorkflowOrchestrator {
 			projectCwd: this.projectCwd,
 			implementationsDir: resolve(this.projectCwd, this.config.implementationsDir),
 			resumeContext: resumeCtx,
-			onEvent: this.onEvent,
+			onEvent: (event) => this.handlePhaseEvent(event),
 		};
+	}
+
+	/**
+	 * Handles events emitted from phase internals (mostly execute/review loops).
+	 * These are forwarded to the UI callback and mirrored into informational hooks.
+	 */
+	private handlePhaseEvent(event: OrchestratorEvent): void {
+		this.emitEvent(event);
+
+		switch (event.type) {
+			case "slice_started":
+				this.emitHookNotification("slice:start", event.runId, {
+					sliceIndex: event.sliceIndex,
+					sliceName: event.sliceName,
+				});
+				break;
+			case "slice_completed":
+				this.emitHookNotification("slice:complete", event.runId, {
+					sliceIndex: event.sliceIndex,
+					sliceName: event.sliceName,
+					costUsd: event.costUsd,
+					durationMs: event.durationMs,
+				});
+				break;
+			case "slice_failed":
+				this.emitHookNotification("slice:failed", event.runId, {
+					sliceIndex: event.sliceIndex,
+					sliceName: event.sliceName,
+					error: event.error,
+				});
+				break;
+			case "slice_approval_requested":
+				this.emitHookNotification("slice:approval_requested", event.runId, {
+					sliceIndex: event.sliceIndex,
+					sliceName: event.sliceName,
+					artifactPath: event.artifactPath,
+				});
+				break;
+			case "slice_approval_resolved":
+				this.emitHookNotification("slice:approval_received", event.runId, {
+					sliceIndex: event.sliceIndex,
+					sliceName: event.sliceName,
+					decision: event.decision,
+				});
+				break;
+			case "review_started":
+				this.emitHookNotification("review:start", event.runId, {
+					sliceIndex: event.sliceIndex,
+					iteration: event.iteration,
+				});
+				break;
+			case "review_completed":
+				this.emitHookNotification("review:verdict", event.runId, {
+					sliceIndex: event.sliceIndex,
+					iteration: event.iteration,
+					verdict: event.verdict,
+				});
+				break;
+			default:
+				break;
+		}
 	}
 
 	/**

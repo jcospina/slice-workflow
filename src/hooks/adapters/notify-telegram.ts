@@ -74,6 +74,10 @@ function formatFutureEvent(
 			return `<b>slice</b> slice ${escHtml(toSafeString(payload.sliceIndex, "?"))} complete ${id}\nCost: $${toSafeNumber(payload.costUsd).toFixed(4)} | ${toSafeNumber(payload.durationMs)}ms`;
 		case "slice:failed":
 			return `<b>slice</b> slice ${escHtml(toSafeString(payload.sliceIndex, "?"))} failed ${id}\n${escHtml(toSafeString(payload.error))}`;
+		case "slice:approval_requested":
+			return `<b>slice</b> approval requested for slice ${escHtml(toSafeString(payload.sliceIndex, "?"))}${payload.sliceName ? ` - ${escHtml(toSafeString(payload.sliceName))}` : ""} ${id}`;
+		case "slice:approval_received":
+			return `<b>slice</b> approval <b>${escHtml(toSafeString(payload.decision))}</b> for slice ${escHtml(toSafeString(payload.sliceIndex, "?"))}${payload.sliceName ? ` - ${escHtml(toSafeString(payload.sliceName))}` : ""} ${id}`;
 		case "review:start":
 			return `<b>slice</b> review started - slice ${escHtml(toSafeString(payload.sliceIndex, "?"))}, iteration ${escHtml(toSafeString(payload.iteration, "1"))} ${id}`;
 		case "review:verdict":

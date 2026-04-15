@@ -305,6 +305,20 @@ Key behavior constraints:
 | DiagnosticTracker (`src/diagnostics/tracker.ts`) | Capture tsc/lint/test baselines and compute post-slice delta | Worktree output | DiagnosticDelta for reviewer prompt |
 | GitHub resume integration (`src/github`) | Resume context from PR review feedback | PR comments and diff context | Resume invocation context |
 
+### Execute phase module layout
+
+The execute phase is organized under `src/orchestrator/phases/execute/`:
+
+- `index.ts`: phase entrypoint and public execute exports.
+- `common.ts`: shared constants and helper functions.
+- `types.ts`: execute-internal shared types.
+- `parsers.ts`: plan, track, and review-output parsers.
+- `review.ts`: reviewer/fixer prompt construction and review loop orchestration.
+- `slice.ts`: per-slice execution, gated approval loop, and worktree lifecycle.
+- `sequential.ts`: run-level slice seeding and sequential resume-safe execution loop.
+
+This split is structural only; state transitions, event payloads, and execution behavior remain unchanged.
+
 ## Approval and notification wiring
 
 Notification delivery is hook-first. Approval is TUI-only — approval gates pause execution and surface inline controls in the running TUI for the user to approve, request changes, or reject. External channels (Slack, Telegram) may receive informational hook notifications about pending approval requests but cannot submit approval decisions.
