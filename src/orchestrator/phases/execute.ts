@@ -224,7 +224,11 @@ async function buildReviewPrompts(
 			trackDocPath: sliceCtx.trackDocPath,
 		},
 		slice: { index: def.index, name: def.name, dod: def.dod },
-		review: { iteration, severityThreshold: ctx.config.review.severityThreshold },
+		review: {
+			iteration,
+			severityThreshold: ctx.config.review.severityThreshold,
+			adversarial: ctx.config.review.adversarial,
+		},
 		includeContext: true,
 	});
 	const prompt = [built.layers.context, built.layers.task].filter(Boolean).join("\n\n");
@@ -320,9 +324,10 @@ async function runReviewIteration(
 	try {
 		reviewPrompts = await buildReviewPrompts(ctx, def, sliceCtx, iteration);
 	} catch {
+		const role = ctx.config.review.adversarial ? "Adversarial" : "Cooperative";
 		reviewPrompts = {
-			systemPrompt: "Role: Adversarial slice reviewer. Return JSON verdict.",
-			prompt: `Review slice ${def.index} (${def.name}) changes. Return JSON with verdict FAIL, confidence 0, summary of error, findings [].`,
+			systemPrompt: `Role: ${role} slice reviewer. Return strict JSON only with verdict PASS, FAIL, or PARTIAL.`,
+			prompt: `Review slice ${def.index} (${def.name}) changes. Return JSON only: {"verdict":"FAIL","confidence":0,"summary":"Prompt build error fallback used.","findings":[]}.`,
 		};
 	}
 

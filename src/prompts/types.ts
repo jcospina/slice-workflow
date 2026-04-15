@@ -37,6 +37,7 @@ export interface ReviewFinding {
 export interface PromptReviewContext {
 	iteration?: number;
 	severityThreshold?: ReviewSeverity;
+	adversarial?: boolean;
 	findings?: ReviewFinding[];
 }
 

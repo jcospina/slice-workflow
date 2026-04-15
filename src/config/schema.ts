@@ -107,6 +107,11 @@ const reviewSchema = z.object({
 		.describe(
 			"Minimum severity that triggers a fix iteration; 'minor' findings are logged but don't loop",
 		),
+	adversarial: z
+		.boolean()
+		.optional()
+		.default(true)
+		.describe("Use adversarial verification instead of cooperative review"),
 });
 
 const hookEventEnum = z
@@ -320,12 +325,16 @@ export const resolvedConfigSchema = z
 				severityThreshold: severityEnum
 					.default("major")
 					.describe("Minimum severity that triggers a fix iteration"),
+				adversarial: z
+					.boolean()
+					.default(true)
+					.describe("Use adversarial verification instead of cooperative review"),
 				reviewProvider: z
 					.string()
 					.optional()
 					.describe("Alternative provider for the reviewer agent (e.g. cheaper model)"),
 			})
-			.default({ enabled: true, maxIterations: 2, severityThreshold: "major" })
+			.default({ enabled: true, maxIterations: 2, severityThreshold: "major", adversarial: true })
 			.describe("Post-slice review loop configuration"),
 	})
 	.describe("Fully resolved configuration with all defaults applied");

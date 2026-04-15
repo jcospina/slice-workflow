@@ -75,6 +75,7 @@ const BASE_CONFIG = {
 		enabled: true,
 		maxIterations: 2,
 		severityThreshold: "major" as const,
+		adversarial: true,
 	},
 };
 
@@ -492,6 +493,7 @@ describe("run() - fresh start", () => {
 		expect(executeCtx?.config.review.enabled).toBe(true);
 		expect(executeCtx?.config.review.maxIterations).toBe(2);
 		expect(executeCtx?.config.review.severityThreshold).toBe("major");
+		expect(executeCtx?.config.review.adversarial).toBe(true);
 
 		state.close();
 	});

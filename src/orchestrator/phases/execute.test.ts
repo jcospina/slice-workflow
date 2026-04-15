@@ -124,6 +124,7 @@ function makePhaseContext(overrides?: {
 				enabled: overrides?.reviewEnabled ?? false,
 				maxIterations: 2,
 				severityThreshold: "major",
+				adversarial: true,
 			},
 		} as unknown as PhaseContext["config"],
 		runtime: {
