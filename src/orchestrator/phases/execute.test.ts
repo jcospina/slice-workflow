@@ -115,7 +115,8 @@ function makePhaseContext(overrides?: {
 		phase: "execute",
 		config: {
 			implementationsDir: "implementations",
-		} as PhaseContext["config"],
+			providers: { claudeCode: {}, opencode: {} },
+		} as unknown as PhaseContext["config"],
 		runtime: {
 			provider: "claude-code",
 			run: vi.fn().mockResolvedValue(makeSuccessResult()),
@@ -454,6 +455,90 @@ Definition of Done:
 				prompt: "Context block\n\nTask instructions",
 			}),
 		);
+	});
+
+	it("passes maxTurns from claude-code provider config to runtime.run()", async () => {
+		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+		mockReadFile.mockResolvedValue(singleSlicePlan);
+		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+			ReturnType<typeof readdir>
+		>);
+
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+		const runSpy = vi.fn().mockResolvedValue(makeSuccessResult());
+
+		const ctx = makePhaseContext({
+			runtime: { run: runSpy },
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: vi.fn(),
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+		});
+		// Override providers with a maxTurns value
+		ctx.config = {
+			...ctx.config,
+			providers: { claudeCode: { maxTurns: 10 }, opencode: {} },
+		} as unknown as typeof ctx.config;
+
+		await runExecutePhase(ctx);
+
+		expect(runSpy).toHaveBeenCalledWith(expect.objectContaining({ maxTurns: 10 }));
+	});
+
+	it("passes maxTurns from opencode provider config to runtime.run()", async () => {
+		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+		mockReadFile.mockResolvedValue(singleSlicePlan);
+		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+			ReturnType<typeof readdir>
+		>);
+
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+		const runSpy = vi.fn().mockResolvedValue(makeSuccessResult());
+
+		const ctx = makePhaseContext({
+			runtime: { provider: "opencode", run: runSpy, runInteractive: vi.fn() },
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: vi.fn(),
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+		});
+		ctx.config = {
+			...ctx.config,
+			providers: { claudeCode: {}, opencode: { maxTurns: 5 } },
+		} as unknown as typeof ctx.config;
+
+		await runExecutePhase(ctx);
+
+		expect(runSpy).toHaveBeenCalledWith(expect.objectContaining({ maxTurns: 5 }));
+	});
+
+	it("passes maxTurns as undefined when not configured", async () => {
+		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+		mockReadFile.mockResolvedValue(singleSlicePlan);
+		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+			ReturnType<typeof readdir>
+		>);
+
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+		const runSpy = vi.fn().mockResolvedValue(makeSuccessResult());
+
+		const ctx = makePhaseContext({
+			runtime: { run: runSpy },
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: vi.fn(),
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+		});
+
+		await runExecutePhase(ctx);
+
+		expect(runSpy).toHaveBeenCalledWith(expect.objectContaining({ maxTurns: undefined }));
 	});
 
 	it("updates workingBranch per-slice (not only at end)", async () => {

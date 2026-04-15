@@ -63,6 +63,19 @@ function getAllowedToolsForRuntime(
 	return undefined;
 }
 
+function getMaxTurnsForRuntime(
+	provider: PhaseContext["runtime"]["provider"],
+	config: PhaseContext["config"],
+): number | undefined {
+	if (provider === "claude-code") {
+		return config.providers.claudeCode.maxTurns;
+	}
+	if (provider === "opencode") {
+		return config.providers.opencode.maxTurns;
+	}
+	return undefined;
+}
+
 // --- Plan document parser ---
 
 /**
@@ -190,7 +203,6 @@ async function buildSlicePrompts(
 	});
 
 	const prompt = [built.layers.context, built.layers.task].filter(Boolean).join("\n\n");
-
 	return { systemPrompt: built.layers.system, prompt };
 }
 
@@ -323,6 +335,7 @@ async function runSliceInWorktree(
 		systemPrompt: prompts.systemPrompt,
 		prompt: prompts.prompt,
 		allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
+		maxTurns: getMaxTurnsForRuntime(ctx.runtime.provider, ctx.config),
 		onProgress: () => {
 			// Phase-local. Top-level orchestrator events do not currently include a
 			// progress event contract for slice agents.

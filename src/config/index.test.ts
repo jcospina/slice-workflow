@@ -51,6 +51,29 @@ describe("resolveConfig", () => {
 		expect(result.providers.opencode.command).toBe("opencode-personal");
 	});
 
+	it("merges maxTurns for both providers with project taking precedence", () => {
+		const global: GlobalConfig = {
+			providers: {
+				claudeCode: { maxTurns: 20 },
+				opencode: { maxTurns: 15 },
+			},
+		};
+		const project: ProjectConfig = {
+			providers: {
+				claudeCode: { maxTurns: 10 },
+			},
+		};
+		const result = resolveConfig(global, project);
+		expect(result.providers.claudeCode.maxTurns).toBe(10);
+		expect(result.providers.opencode.maxTurns).toBe(15);
+	});
+
+	it("leaves maxTurns undefined when not configured", () => {
+		const result = resolveConfig({}, {});
+		expect(result.providers.claudeCode.maxTurns).toBeUndefined();
+		expect(result.providers.opencode.maxTurns).toBeUndefined();
+	});
+
 	it("resolves hooks to an empty array when omitted", () => {
 		const result = resolveConfig({}, {});
 		expect(result.hooks).toEqual([]);
