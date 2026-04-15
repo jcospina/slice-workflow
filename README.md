@@ -106,7 +106,12 @@ Approvals are channel-agnostic and return one `ApprovalResult` contract. Dependi
 {
   "provider": "claude-code",
   "sliceExecution": "autonomous",
-  "review": { "enabled": true, "maxIterations": 2, "severityThreshold": "major" }
+  "review": {
+    "enabled": true,
+    "maxIterations": 2,
+    "severityThreshold": "major",
+    "adversarial": true
+  }
 }
 ```
 

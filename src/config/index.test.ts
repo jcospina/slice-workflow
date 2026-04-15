@@ -167,6 +167,7 @@ describe("resolveConfig", () => {
 				enabled: false,
 				maxIterations: 5,
 				severityThreshold: "critical",
+				adversarial: false,
 				reviewProvider: "opencode",
 			},
 		};
@@ -178,6 +179,7 @@ describe("resolveConfig", () => {
 			enabled: false,
 			maxIterations: 5,
 			severityThreshold: "critical",
+			adversarial: false,
 			reviewProvider: "opencode",
 		});
 	});

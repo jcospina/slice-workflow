@@ -46,6 +46,7 @@ describe("DefaultPromptBuilder", () => {
 			review: {
 				iteration: 1,
 				severityThreshold: "major",
+				adversarial: true,
 				findings: [
 					{
 						severity: "major",
@@ -100,7 +101,8 @@ describe("DefaultPromptBuilder", () => {
 		expect(execution.layers.system).toContain("Do NOT read other files in the tracks/ directory.");
 
 		const review = await builder.buildPrompt("slice-review", inputBase);
-		expect(review.layers.system).toContain('"verdict": "PASS" | "FAIL"');
+		expect(review.layers.system).toContain('"verdict": "PASS" | "FAIL" | "PARTIAL"');
+		expect(review.layers.system).toContain("verification avoidance");
 		expect(review.layers.system).toContain("critical, major, minor");
 		expect(review.layers.task).toContain("Only include findings introduced by this diff.");
 	});

@@ -45,6 +45,7 @@ describe("registerPlanCommand", () => {
 				enabled: true,
 				maxIterations: 2,
 				severityThreshold: "major",
+				adversarial: true,
 			},
 		});
 		createAgentRuntimeMock.mockReturnValue({
