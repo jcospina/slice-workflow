@@ -84,6 +84,7 @@ export function resolveConfig(global: GlobalConfig, project: ProjectConfig): Res
 		implementationsDir: project.implementationsDir,
 		approvalGates: project.approvalGates,
 		sliceExecution: project.sliceExecution,
+		execution: project.execution,
 		review: project.review,
 	});
 }

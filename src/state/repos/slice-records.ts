@@ -13,6 +13,7 @@ function mapRow(row: SnakeRow): SliceRecord {
 		agentSessionId: (row.agent_session_id as string) ?? null,
 		costUsd: (row.cost_usd as number) ?? null,
 		durationMs: (row.duration_ms as number) ?? null,
+		turnsUsed: (row.turns_used as number) ?? null,
 		error: (row.error as string) ?? null,
 		startedAt: (row.started_at as string) ?? null,
 		endedAt: (row.ended_at as string) ?? null,
@@ -32,8 +33,8 @@ export class SliceRecordRepo {
 		const now = new Date().toISOString();
 		this.db
 			.prepare(
-				`INSERT INTO slice_records (id, run_id, "index", name, status, agent_session_id, cost_usd, duration_ms, error, started_at, ended_at, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO slice_records (id, run_id, "index", name, status, agent_session_id, cost_usd, duration_ms, turns_used, error, started_at, ended_at, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				id,
@@ -44,6 +45,7 @@ export class SliceRecordRepo {
 				input.agentSessionId,
 				input.costUsd,
 				input.durationMs,
+				input.turnsUsed,
 				input.error,
 				input.startedAt,
 				input.endedAt,
@@ -78,6 +80,10 @@ export class SliceRecordRepo {
 		if (updates.durationMs !== undefined) {
 			fields.push("duration_ms = ?");
 			values.push(updates.durationMs);
+		}
+		if (updates.turnsUsed !== undefined) {
+			fields.push("turns_used = ?");
+			values.push(updates.turnsUsed);
 		}
 		if (updates.error !== undefined) {
 			fields.push("error = ?");

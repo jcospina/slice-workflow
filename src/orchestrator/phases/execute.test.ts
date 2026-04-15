@@ -69,6 +69,7 @@ function makeSliceRecord(
 		agentSessionId: null,
 		costUsd: null,
 		durationMs: null,
+		turnsUsed: null,
 		error: null,
 		startedAt: null,
 		endedAt: null,
@@ -116,6 +117,7 @@ function makePhaseContext(overrides?: {
 		config: {
 			implementationsDir: "implementations",
 			providers: { claudeCode: {}, opencode: {} },
+			execution: { maxTurnsPerSlice: 50, maxTurnsPerReview: 20 },
 		} as unknown as PhaseContext["config"],
 		runtime: {
 			provider: "claude-code",
@@ -457,7 +459,7 @@ Definition of Done:
 		);
 	});
 
-	it("passes maxTurns from claude-code provider config to runtime.run()", async () => {
+	it("passes execution.maxTurnsPerSlice to runtime.run()", async () => {
 		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
 		mockReadFile.mockResolvedValue(singleSlicePlan);
 		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
@@ -476,47 +478,17 @@ Definition of Done:
 				listByRun: vi.fn().mockReturnValue([]),
 			},
 		});
-		// Override providers with a maxTurns value
 		ctx.config = {
 			...ctx.config,
-			providers: { claudeCode: { maxTurns: 10 }, opencode: {} },
+			execution: { maxTurnsPerSlice: 30, maxTurnsPerReview: 20 },
 		} as unknown as typeof ctx.config;
 
 		await runExecutePhase(ctx);
 
-		expect(runSpy).toHaveBeenCalledWith(expect.objectContaining({ maxTurns: 10 }));
+		expect(runSpy).toHaveBeenCalledWith(expect.objectContaining({ maxTurns: 30 }));
 	});
 
-	it("passes maxTurns from opencode provider config to runtime.run()", async () => {
-		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
-		mockReadFile.mockResolvedValue(singleSlicePlan);
-		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
-			ReturnType<typeof readdir>
-		>);
-
-		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
-		const runSpy = vi.fn().mockResolvedValue(makeSuccessResult());
-
-		const ctx = makePhaseContext({
-			runtime: { provider: "opencode", run: runSpy, runInteractive: vi.fn() },
-			stateSlices: {
-				getByIndex: vi.fn().mockReturnValue(sliceRecord),
-				create: vi.fn().mockReturnValue(sliceRecord),
-				update: vi.fn(),
-				listByRun: vi.fn().mockReturnValue([]),
-			},
-		});
-		ctx.config = {
-			...ctx.config,
-			providers: { claudeCode: {}, opencode: { maxTurns: 5 } },
-		} as unknown as typeof ctx.config;
-
-		await runExecutePhase(ctx);
-
-		expect(runSpy).toHaveBeenCalledWith(expect.objectContaining({ maxTurns: 5 }));
-	});
-
-	it("passes maxTurns as undefined when not configured", async () => {
+	it("passes default execution.maxTurnsPerSlice (50) when not overridden", async () => {
 		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
 		mockReadFile.mockResolvedValue(singleSlicePlan);
 		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
@@ -538,7 +510,7 @@ Definition of Done:
 
 		await runExecutePhase(ctx);
 
-		expect(runSpy).toHaveBeenCalledWith(expect.objectContaining({ maxTurns: undefined }));
+		expect(runSpy).toHaveBeenCalledWith(expect.objectContaining({ maxTurns: 50 }));
 	});
 
 	it("updates workingBranch per-slice (not only at end)", async () => {
@@ -1115,6 +1087,172 @@ Definition of Done:
 				baseBranch: "main",
 			}),
 		);
+	});
+
+	// ---------------------------------------------------------------------------
+	// Turn tracking
+	// ---------------------------------------------------------------------------
+
+	it("persists turnsUsed to slice record on success", async () => {
+		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+		mockReadFile.mockResolvedValue(singleSlicePlan);
+		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+			ReturnType<typeof readdir>
+		>);
+
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+		const sliceUpdateSpy = vi.fn();
+
+		const ctx = makePhaseContext({
+			runtime: {
+				run: vi.fn().mockImplementation((options: { onProgress?: (e: unknown) => void }) => {
+					options.onProgress?.({ type: "turn_complete", turnNumber: 1 });
+					options.onProgress?.({ type: "turn_complete", turnNumber: 2 });
+					options.onProgress?.({ type: "turn_complete", turnNumber: 3 });
+					return Promise.resolve(makeSuccessResult());
+				}),
+			},
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: sliceUpdateSpy,
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+		});
+
+		await runExecutePhase(ctx);
+
+		const completedUpdate = sliceUpdateSpy.mock.calls.find(
+			(call: unknown[]) => (call[1] as { status?: string })?.status === "completed",
+		);
+		expect(completedUpdate).toBeDefined();
+		expect(completedUpdate?.[1]).toMatchObject({ turnsUsed: 3 });
+	});
+
+	it("persists turnsUsed to slice record on failure", async () => {
+		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+		mockReadFile.mockResolvedValue(singleSlicePlan);
+		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+			ReturnType<typeof readdir>
+		>);
+
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+		const sliceUpdateSpy = vi.fn();
+
+		const ctx = makePhaseContext({
+			runtime: {
+				run: vi.fn().mockImplementation((options: { onProgress?: (e: unknown) => void }) => {
+					options.onProgress?.({ type: "turn_complete", turnNumber: 1 });
+					options.onProgress?.({ type: "turn_complete", turnNumber: 2 });
+					return Promise.resolve({
+						success: false,
+						output: "error",
+						sessionId: "sess-fail",
+						costUsd: 0.1,
+						durationMs: 500,
+						error: "agent failed",
+					} satisfies AgentRunResult);
+				}),
+			},
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: sliceUpdateSpy,
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+		});
+
+		await runExecutePhase(ctx);
+
+		const failedUpdate = sliceUpdateSpy.mock.calls.find(
+			(call: unknown[]) => (call[1] as { status?: string })?.status === "failed",
+		);
+		expect(failedUpdate).toBeDefined();
+		expect(failedUpdate?.[1]).toMatchObject({ turnsUsed: 2 });
+	});
+
+	it("emits slice_turn_warning when turns exceed 80% of maxTurnsPerSlice", async () => {
+		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+		mockReadFile.mockResolvedValue(singleSlicePlan);
+		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+			ReturnType<typeof readdir>
+		>);
+
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+		const events: unknown[] = [];
+
+		// With maxTurnsPerSlice=10, warning threshold is 8 (floor(10*0.8))
+		const ctx = makePhaseContext({
+			runtime: {
+				run: vi.fn().mockImplementation((options: { onProgress?: (e: unknown) => void }) => {
+					for (let t = 1; t <= 10; t++) {
+						options.onProgress?.({ type: "turn_complete", turnNumber: t });
+					}
+					return Promise.resolve(makeSuccessResult());
+				}),
+			},
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: vi.fn(),
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+			onEvent: (e) => events.push(e),
+		});
+		ctx.config = {
+			...ctx.config,
+			execution: { maxTurnsPerSlice: 10, maxTurnsPerReview: 20 },
+		} as unknown as typeof ctx.config;
+
+		await runExecutePhase(ctx);
+
+		const warnings = events.filter((e) => (e as { type: string }).type === "slice_turn_warning");
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toMatchObject({
+			type: "slice_turn_warning",
+			sliceIndex: 0,
+			turnNumber: 9,
+			maxTurns: 10,
+		});
+	});
+
+	it("emits turn warning only once even when multiple turns exceed threshold", async () => {
+		const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+		mockReadFile.mockResolvedValue(singleSlicePlan);
+		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+			ReturnType<typeof readdir>
+		>);
+
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+		const events: unknown[] = [];
+
+		const ctx = makePhaseContext({
+			runtime: {
+				run: vi.fn().mockImplementation((options: { onProgress?: (e: unknown) => void }) => {
+					// 5 turns all above threshold (threshold = floor(4*0.8) = 3)
+					for (let t = 4; t <= 8; t++) {
+						options.onProgress?.({ type: "turn_complete", turnNumber: t });
+					}
+					return Promise.resolve(makeSuccessResult());
+				}),
+			},
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: vi.fn(),
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+			onEvent: (e) => events.push(e),
+		});
+		ctx.config = {
+			...ctx.config,
+			execution: { maxTurnsPerSlice: 4, maxTurnsPerReview: 20 },
+		} as unknown as typeof ctx.config;
+
+		await runExecutePhase(ctx);
+
+		const warnings = events.filter((e) => (e as { type: string }).type === "slice_turn_warning");
+		expect(warnings).toHaveLength(1);
 	});
 
 	it("updates workingBranch per-slice immediately after success", async () => {

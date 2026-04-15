@@ -85,6 +85,13 @@ const migrations: Migration[] = [
 			CREATE INDEX idx_slice_records_status ON slice_records(status);
 		`,
 	},
+	{
+		version: 2,
+		description: "Add turns_used column to slice_records",
+		up: `
+			ALTER TABLE slice_records ADD COLUMN turns_used INTEGER;
+		`,
+	},
 ];
 
 export function runMigrations(db: Database.Database): void {
