@@ -631,6 +631,79 @@ describe("review results", () => {
 		expect(latest?.iteration).toBe(2);
 		expect(latest?.verdict).toBe("PASS");
 	});
+
+	it("countBySlice returns 0 when no reviews exist for slice", () => {
+		expect(sm.reviews.countBySlice(runId, 0)).toBe(0);
+	});
+
+	it("countBySlice returns correct count after creating reviews", () => {
+		const base = {
+			runId,
+			sliceIndex: 0,
+			verdict: "FAIL" as const,
+			confidence: 0.8,
+			findings: "[]",
+			summary: "",
+			reviewerSessionId: null,
+			costUsd: null,
+		};
+		sm.reviews.create({ ...base, iteration: 1 });
+		expect(sm.reviews.countBySlice(runId, 0)).toBe(1);
+		sm.reviews.create({ ...base, iteration: 2, verdict: "PASS" });
+		expect(sm.reviews.countBySlice(runId, 0)).toBe(2);
+	});
+
+	it("countBySlice is isolated by sliceIndex", () => {
+		const base = {
+			runId,
+			verdict: "PASS" as const,
+			confidence: 0.9,
+			findings: "[]",
+			summary: "",
+			reviewerSessionId: null,
+			costUsd: null,
+		};
+		sm.reviews.create({ ...base, sliceIndex: 0, iteration: 1 });
+		sm.reviews.create({ ...base, sliceIndex: 1, iteration: 1 });
+		sm.reviews.create({ ...base, sliceIndex: 1, iteration: 2 });
+		expect(sm.reviews.countBySlice(runId, 0)).toBe(1);
+		expect(sm.reviews.countBySlice(runId, 1)).toBe(2);
+	});
+
+	it("countBySlice is isolated by runId", () => {
+		const runId2 = sm.runs.create(makeRun({ slug: "other-run" })).id;
+		const base = {
+			sliceIndex: 0,
+			iteration: 1,
+			verdict: "PASS" as const,
+			confidence: 0.9,
+			findings: "[]",
+			summary: "",
+			reviewerSessionId: null,
+			costUsd: null,
+		};
+		sm.reviews.create({ ...base, runId });
+		sm.reviews.create({ ...base, runId: runId2 });
+		expect(sm.reviews.countBySlice(runId, 0)).toBe(1);
+		expect(sm.reviews.countBySlice(runId2, 0)).toBe(1);
+	});
+
+	it("stores and retrieves PARTIAL verdict", () => {
+		const review = sm.reviews.create({
+			runId,
+			sliceIndex: 0,
+			iteration: 1,
+			verdict: "PARTIAL",
+			confidence: 0.6,
+			findings: "[]",
+			summary: "Partial pass",
+			reviewerSessionId: null,
+			costUsd: null,
+		});
+		expect(review.verdict).toBe("PARTIAL");
+		const fetched = sm.reviews.get(review.id);
+		expect(fetched?.verdict).toBe("PARTIAL");
+	});
 });
 
 // --- Notification Log ---

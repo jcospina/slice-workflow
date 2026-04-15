@@ -1,11 +1,12 @@
 import { copyFile, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import type { ReviewFinding } from "../../prompts/types";
 import {
 	type SliceExecutionContext,
 	buildSliceExecutionContext,
 } from "../../runtime/slice-context";
 import type { AgentRunResult } from "../../runtime/types";
-import type { SliceRecord } from "../../state/types";
+import type { ReviewVerdict, SliceRecord } from "../../state/types";
 import type { PhaseContext, PhaseResult } from "./types";
 
 // --- Constants ---
@@ -198,6 +199,246 @@ async function buildSlicePrompts(
 	return { systemPrompt: built.layers.system, prompt };
 }
 
+// --- Review loop helpers ---
+
+async function buildReviewPrompts(
+	ctx: PhaseContext,
+	def: SliceDefinition,
+	sliceCtx: SliceExecutionContext,
+	iteration: number,
+): Promise<{ systemPrompt: string; prompt: string }> {
+	const built = await ctx.prompts.buildPrompt("slice-review", {
+		slug: ctx.run.slug,
+		runId: ctx.runId,
+		taskDescription: ctx.run.taskDescription,
+		topLevelPhase: ctx.phase,
+		preReadContent: {
+			planDoc: sliceCtx.planDoc,
+			progressDoc: sliceCtx.progressDoc,
+			trackDoc: sliceCtx.trackDoc,
+		},
+		worktreeBoundary: {
+			worktreePath: sliceCtx.worktreePath,
+			planDocPath: sliceCtx.planDocPath,
+			progressDocPath: sliceCtx.progressDocPath,
+			trackDocPath: sliceCtx.trackDocPath,
+		},
+		slice: { index: def.index, name: def.name, dod: def.dod },
+		review: { iteration, severityThreshold: ctx.config.review.severityThreshold },
+		includeContext: true,
+	});
+	const prompt = [built.layers.context, built.layers.task].filter(Boolean).join("\n\n");
+	return { systemPrompt: built.layers.system, prompt };
+}
+
+async function buildFixPrompts(
+	ctx: PhaseContext,
+	def: SliceDefinition,
+	sliceCtx: SliceExecutionContext,
+	iteration: number,
+	findings: ReviewFinding[],
+): Promise<{ systemPrompt: string; prompt: string }> {
+	const built = await ctx.prompts.buildPrompt("slice-fix", {
+		slug: ctx.run.slug,
+		runId: ctx.runId,
+		taskDescription: ctx.run.taskDescription,
+		topLevelPhase: ctx.phase,
+		preReadContent: {
+			planDoc: sliceCtx.planDoc,
+			progressDoc: sliceCtx.progressDoc,
+			trackDoc: sliceCtx.trackDoc,
+		},
+		worktreeBoundary: {
+			worktreePath: sliceCtx.worktreePath,
+			planDocPath: sliceCtx.planDocPath,
+			progressDocPath: sliceCtx.progressDocPath,
+			trackDocPath: sliceCtx.trackDocPath,
+		},
+		slice: { index: def.index, name: def.name, dod: def.dod },
+		review: { iteration, severityThreshold: ctx.config.review.severityThreshold, findings },
+		includeContext: true,
+	});
+	const prompt = [built.layers.context, built.layers.task].filter(Boolean).join("\n\n");
+	return { systemPrompt: built.layers.system, prompt };
+}
+
+const JSON_BLOCK_RE = /\{[\s\S]*\}/;
+
+interface ParsedReview {
+	verdict: ReviewVerdict;
+	confidence: number;
+	summary: string;
+	findings: ReviewFinding[];
+}
+
+export function parseReviewOutput(output: string): ParsedReview | null {
+	const jsonMatch = output.match(JSON_BLOCK_RE);
+	if (!jsonMatch) {
+		return null;
+	}
+	try {
+		const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+		const verdict = parsed.verdict as string;
+		if (verdict !== "PASS" && verdict !== "FAIL" && verdict !== "PARTIAL") {
+			return null;
+		}
+		return {
+			verdict: verdict as ReviewVerdict,
+			confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
+			summary: typeof parsed.summary === "string" ? parsed.summary : "",
+			findings: Array.isArray(parsed.findings) ? (parsed.findings as ReviewFinding[]) : [],
+		};
+	} catch {
+		return null;
+	}
+}
+
+interface ReviewLoopOutcome {
+	passed: boolean;
+	escalationError?: string;
+	totalCostUsd: number;
+	totalDurationMs: number;
+}
+
+interface IterationResult {
+	verdict: ReviewVerdict;
+	summary: string;
+	findings: ReviewFinding[];
+	costUsd: number;
+	durationMs: number;
+}
+
+/** Runs the reviewer agent once and persists the verdict. Returns the parsed result. */
+async function runReviewIteration(
+	ctx: PhaseContext,
+	def: SliceDefinition,
+	sliceCtx: SliceExecutionContext,
+	worktreePath: string,
+	iteration: number,
+): Promise<IterationResult> {
+	let reviewPrompts: { systemPrompt: string; prompt: string };
+	try {
+		reviewPrompts = await buildReviewPrompts(ctx, def, sliceCtx, iteration);
+	} catch {
+		reviewPrompts = {
+			systemPrompt: "Role: Adversarial slice reviewer. Return JSON verdict.",
+			prompt: `Review slice ${def.index} (${def.name}) changes. Return JSON with verdict FAIL, confidence 0, summary of error, findings [].`,
+		};
+	}
+
+	const reviewResult = await ctx.runtime.run({
+		cwd: worktreePath,
+		systemPrompt: reviewPrompts.systemPrompt,
+		prompt: reviewPrompts.prompt,
+		allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
+		maxTurns: ctx.config.execution.maxTurnsPerReview,
+	});
+
+	const parsed = parseReviewOutput(reviewResult.output);
+	const verdict: ReviewVerdict = parsed?.verdict ?? "FAIL";
+	const confidence = parsed?.confidence ?? 0;
+	const summary = parsed?.summary ?? "Reviewer output could not be parsed.";
+	const findings: ReviewFinding[] = parsed?.findings ?? [];
+
+	// Persist verdict before any branching decision — required for auditability and resume.
+	ctx.state.reviews.create({
+		runId: ctx.runId,
+		sliceIndex: def.index,
+		iteration,
+		verdict,
+		confidence,
+		findings: JSON.stringify(findings),
+		summary,
+		reviewerSessionId: reviewResult.sessionId ?? null,
+		costUsd: reviewResult.costUsd ?? null,
+	});
+	ctx.onEvent?.({
+		type: "review_completed",
+		runId: ctx.runId,
+		sliceIndex: def.index,
+		iteration,
+		verdict,
+	});
+
+	return {
+		verdict,
+		summary,
+		findings,
+		costUsd: reviewResult.costUsd ?? 0,
+		durationMs: reviewResult.durationMs ?? 0,
+	};
+}
+
+/** Runs the fixer agent in the worktree. Cost accumulators are mutated in-place. */
+async function runFixIteration(
+	ctx: PhaseContext,
+	def: SliceDefinition,
+	sliceCtx: SliceExecutionContext,
+	worktreePath: string,
+	iteration: number,
+	findings: ReviewFinding[],
+): Promise<{ costUsd: number; durationMs: number }> {
+	let fixPrompts: { systemPrompt: string; prompt: string };
+	try {
+		fixPrompts = await buildFixPrompts(ctx, def, sliceCtx, iteration, findings);
+	} catch {
+		fixPrompts = {
+			systemPrompt: "Role: Targeted fixer for reviewer findings.",
+			prompt: `Fix the issues found in slice ${def.index} (${def.name}).`,
+		};
+	}
+
+	const fixResult = await ctx.runtime.run({
+		cwd: worktreePath,
+		systemPrompt: fixPrompts.systemPrompt,
+		prompt: fixPrompts.prompt,
+		allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
+		maxTurns: ctx.config.execution.maxTurnsPerSlice,
+	});
+	return { costUsd: fixResult.costUsd ?? 0, durationMs: fixResult.durationMs ?? 0 };
+}
+
+async function runReviewLoop(
+	ctx: PhaseContext,
+	def: SliceDefinition,
+	sliceCtx: SliceExecutionContext,
+	worktreePath: string,
+): Promise<ReviewLoopOutcome> {
+	let totalCostUsd = 0;
+	let totalDurationMs = 0;
+
+	for (;;) {
+		const iteration = ctx.state.reviews.countBySlice(ctx.runId, def.index) + 1;
+		ctx.onEvent?.({ type: "review_started", runId: ctx.runId, sliceIndex: def.index, iteration });
+
+		const iter = await runReviewIteration(ctx, def, sliceCtx, worktreePath, iteration);
+		totalCostUsd += iter.costUsd;
+		totalDurationMs += iter.durationMs;
+
+		if (iter.verdict === "PASS") {
+			return { passed: true, totalCostUsd, totalDurationMs };
+		}
+
+		// FAIL or PARTIAL: check if we've hit the cap.
+		const count = ctx.state.reviews.countBySlice(ctx.runId, def.index);
+		if (count >= ctx.config.review.maxIterations) {
+			const escalationError = `Slice ${def.index} (${def.name}) failed review after ${count} iteration(s): ${iter.summary}`;
+			ctx.onEvent?.({
+				type: "review_escalated",
+				runId: ctx.runId,
+				sliceIndex: def.index,
+				error: escalationError,
+			});
+			return { passed: false, escalationError, totalCostUsd, totalDurationMs };
+		}
+
+		// Under cap: run fixer then loop back for re-review.
+		const fix = await runFixIteration(ctx, def, sliceCtx, worktreePath, iteration, iter.findings);
+		totalCostUsd += fix.costUsd;
+		totalDurationMs += fix.durationMs;
+	}
+}
+
 // --- Single slice execution ---
 
 interface SliceOutcome {
@@ -352,6 +593,47 @@ async function runSliceInWorktree(
 			}
 		},
 	});
+
+	// Implementer succeeded. Run review loop if enabled before marking slice complete.
+	if (runResult.success && ctx.config.review.enabled) {
+		const reviewOutcome = await runReviewLoop(ctx, def, sliceCtx, worktreePath);
+		if (!reviewOutcome.passed) {
+			const endedAt = new Date().toISOString();
+			const msg = reviewOutcome.escalationError ?? `Slice ${def.index} review escalated.`;
+			ctx.state.slices.update(record.id, {
+				status: "failed",
+				agentSessionId: runResult.sessionId,
+				costUsd: (runResult.costUsd ?? 0) + reviewOutcome.totalCostUsd,
+				durationMs: (runResult.durationMs ?? 0) + reviewOutcome.totalDurationMs,
+				turnsUsed,
+				error: msg,
+				endedAt,
+			});
+			ctx.onEvent?.({ type: "slice_failed", runId: ctx.runId, sliceIndex: def.index, error: msg });
+			return {
+				failure: makeFailedResult(msg, {
+					agentSessionId: runResult.sessionId,
+					costUsd: (runResult.costUsd ?? 0) + reviewOutcome.totalCostUsd,
+					durationMs: (runResult.durationMs ?? 0) + reviewOutcome.totalDurationMs,
+				}),
+				costUsd: (runResult.costUsd ?? 0) + reviewOutcome.totalCostUsd,
+				durationMs: (runResult.durationMs ?? 0) + reviewOutcome.totalDurationMs,
+			};
+		}
+		// Review passed: combine review costs into the result before marking complete.
+		return applyRunResult(
+			ctx,
+			def,
+			record,
+			{
+				...runResult,
+				costUsd: (runResult.costUsd ?? 0) + reviewOutcome.totalCostUsd,
+				durationMs: (runResult.durationMs ?? 0) + reviewOutcome.totalDurationMs,
+			},
+			worktreePath,
+			turnsUsed,
+		);
+	}
 
 	return applyRunResult(ctx, def, record, runResult, worktreePath, turnsUsed);
 }

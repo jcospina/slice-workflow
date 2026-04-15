@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRunResult } from "../../runtime/types";
 import type { SliceRecord, WorkflowRun } from "../../state/types";
-import { findTrackFile, parsePlanSlices, runExecutePhase } from "./execute";
-import type { PhaseContext } from "./types";
+import { findTrackFile, parsePlanSlices, parseReviewOutput, runExecutePhase } from "./execute";
+import type { OrchestratorEvent, PhaseContext } from "./types";
 
 // --- Mock node:fs/promises ---
 
@@ -94,9 +94,11 @@ function makePhaseContext(overrides?: {
 	worktree?: Partial<PhaseContext["worktree"]>;
 	stateSlices?: Partial<PhaseContext["state"]["slices"]>;
 	stateRuns?: Partial<PhaseContext["state"]["runs"]>;
+	stateReviews?: Partial<PhaseContext["state"]["reviews"]>;
 	prompts?: Partial<PhaseContext["prompts"]>;
 	onEvent?: PhaseContext["onEvent"];
 	workingBranch?: string | null;
+	reviewEnabled?: boolean;
 }): PhaseContext {
 	const run: WorkflowRun = {
 		id: "run-1",
@@ -118,6 +120,11 @@ function makePhaseContext(overrides?: {
 			implementationsDir: "implementations",
 			providers: { claudeCode: {}, opencode: {} },
 			execution: { maxTurnsPerSlice: 50, maxTurnsPerReview: 20 },
+			review: {
+				enabled: overrides?.reviewEnabled ?? false,
+				maxIterations: 2,
+				severityThreshold: "major",
+			},
 		} as unknown as PhaseContext["config"],
 		runtime: {
 			provider: "claude-code",
@@ -136,6 +143,11 @@ function makePhaseContext(overrides?: {
 			runs: {
 				update: vi.fn(),
 				...overrides?.stateRuns,
+			},
+			reviews: {
+				countBySlice: vi.fn().mockReturnValue(0),
+				create: vi.fn().mockReturnValue({ id: "rev-1" }),
+				...overrides?.stateReviews,
 			},
 			getRunCostSummary: vi.fn().mockReturnValue({
 				totalCostUsd: 0,
@@ -1281,5 +1293,336 @@ Definition of Done:
 			"run-1",
 			expect.objectContaining({ workingBranch: "task/demo-slug-0" }),
 		);
+	});
+});
+
+// =============================================================================
+// parseReviewOutput
+// =============================================================================
+
+describe("parseReviewOutput", () => {
+	it("parses a valid PASS verdict", () => {
+		const output = JSON.stringify({
+			verdict: "PASS",
+			confidence: 0.95,
+			summary: "All good",
+			findings: [],
+		});
+		const result = parseReviewOutput(output);
+		expect(result).toEqual({
+			verdict: "PASS",
+			confidence: 0.95,
+			summary: "All good",
+			findings: [],
+		});
+	});
+
+	it("parses a valid FAIL verdict with findings", () => {
+		const findings = [{ severity: "major", file: "src/foo.ts", title: "Bug", body: "desc" }];
+		const output = JSON.stringify({
+			verdict: "FAIL",
+			confidence: 0.7,
+			summary: "Found issues",
+			findings,
+		});
+		const result = parseReviewOutput(output);
+		expect(result?.verdict).toBe("FAIL");
+		expect(result?.findings).toHaveLength(1);
+	});
+
+	it("parses a valid PARTIAL verdict", () => {
+		const output = JSON.stringify({
+			verdict: "PARTIAL",
+			confidence: 0.6,
+			summary: "Some issues",
+			findings: [],
+		});
+		const result = parseReviewOutput(output);
+		expect(result?.verdict).toBe("PARTIAL");
+	});
+
+	it("extracts JSON embedded in surrounding text", () => {
+		const output = `Here is my review:\n${JSON.stringify({ verdict: "PASS", confidence: 1, summary: "ok", findings: [] })}\nEnd of review.`;
+		const result = parseReviewOutput(output);
+		expect(result?.verdict).toBe("PASS");
+	});
+
+	it("returns null for non-JSON output", () => {
+		expect(parseReviewOutput("The code looks good overall.")).toBeNull();
+	});
+
+	it("returns null for JSON with invalid verdict", () => {
+		const output = JSON.stringify({
+			verdict: "UNKNOWN",
+			confidence: 0.5,
+			summary: "",
+			findings: [],
+		});
+		expect(parseReviewOutput(output)).toBeNull();
+	});
+
+	it("returns null for malformed JSON", () => {
+		expect(parseReviewOutput("{verdict: PASS}")).toBeNull();
+	});
+
+	it("defaults confidence to 0 and findings to [] when fields are missing", () => {
+		const output = JSON.stringify({ verdict: "PASS" });
+		const result = parseReviewOutput(output);
+		expect(result?.confidence).toBe(0);
+		expect(result?.findings).toEqual([]);
+		expect(result?.summary).toBe("");
+	});
+});
+
+// =============================================================================
+// Review loop — runExecutePhase integration tests
+// =============================================================================
+
+describe("review loop", () => {
+	const singleSlicePlan = "### Slice 00 - Foundation\nDefinition of Done:\n- Done.";
+	const passOutput = JSON.stringify({
+		verdict: "PASS",
+		confidence: 0.95,
+		summary: "Looks good",
+		findings: [],
+	});
+	const failOutput = JSON.stringify({
+		verdict: "FAIL",
+		confidence: 0.7,
+		summary: "Missing error handling",
+		findings: [{ severity: "major", file: "src/foo.ts", title: "Bug", body: "desc" }],
+	});
+	const partialOutput = JSON.stringify({
+		verdict: "PARTIAL",
+		confidence: 0.5,
+		summary: "Partial issues",
+		findings: [{ severity: "minor", file: "src/bar.ts", title: "Nit", body: "desc" }],
+	});
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockReadFile.mockResolvedValue(singleSlicePlan);
+		mockReaddir.mockResolvedValue(["00-foundation.md"] as unknown as Awaited<
+			ReturnType<typeof readdir>
+		>);
+		mockCopyFile.mockResolvedValue(undefined);
+	});
+
+	function makeReviewCtx(opts: {
+		runtimeResponses: AgentRunResult[];
+		countBySliceResponses?: number[];
+		onEvent?: PhaseContext["onEvent"];
+	}): PhaseContext {
+		let runtimeCallCount = 0;
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+
+		let countCall = 0;
+		const countResponses = opts.countBySliceResponses ?? [0, 1];
+
+		return makePhaseContext({
+			reviewEnabled: true,
+			runtime: {
+				run: vi.fn().mockImplementation(() => {
+					const result = opts.runtimeResponses[runtimeCallCount] ?? makeSuccessResult();
+					runtimeCallCount++;
+					return Promise.resolve(result);
+				}),
+			},
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: vi.fn(),
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+			stateReviews: {
+				countBySlice: vi.fn().mockImplementation(() => {
+					const val = countResponses[countCall] ?? countResponses[countResponses.length - 1];
+					countCall++;
+					return val;
+				}),
+				create: vi.fn().mockReturnValue({ id: "rev-1" }),
+			},
+			stateRuns: { update: vi.fn() },
+			onEvent: opts.onEvent,
+		});
+	}
+
+	it("skips review loop when review.enabled is false", async () => {
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+		const runtimeMock = vi.fn().mockResolvedValue(makeSuccessResult());
+
+		const ctx = makePhaseContext({
+			reviewEnabled: false,
+			runtime: { run: runtimeMock },
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: vi.fn(),
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+			stateRuns: { update: vi.fn() },
+		});
+
+		const result = await runExecutePhase(ctx);
+		expect(result.status).toBe("completed");
+		// Only 1 runtime call (implementer) — no reviewer or fixer
+		expect(runtimeMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("marks slice completed when reviewer returns PASS on first iteration", async () => {
+		const events: OrchestratorEvent[] = [];
+		const ctx = makeReviewCtx({
+			// call 0: implementer, call 1: reviewer → PASS
+			runtimeResponses: [makeSuccessResult(), makeSuccessResult({ output: passOutput })],
+			countBySliceResponses: [0], // countBySlice always returns 0 (pre-create)
+			onEvent: (e) => events.push(e),
+		});
+
+		const result = await runExecutePhase(ctx);
+		expect(result.status).toBe("completed");
+		// reviewer called once, no fixer
+		expect(ctx.runtime.run as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
+		expect(events.some((e) => e.type === "review_started")).toBe(true);
+		expect(events.some((e) => e.type === "review_completed" && e.verdict === "PASS")).toBe(true);
+		expect(events.some((e) => e.type === "slice_completed")).toBe(true);
+	});
+
+	it("runs fixer and re-reviews when reviewer returns FAIL and under cap", async () => {
+		// countBySlice calls: [pre-review1=0, post-review1=1, pre-review2=1, post-review2=2]
+		// but since we PASS on second review, escalation check at post-review1=1 < maxIterations(2) → fix
+		const ctx = makeReviewCtx({
+			// call 0: implementer, call 1: reviewer FAIL, call 2: fixer, call 3: reviewer PASS
+			runtimeResponses: [
+				makeSuccessResult(),
+				makeSuccessResult({ output: failOutput }),
+				makeSuccessResult({ output: "Fixed the issues." }),
+				makeSuccessResult({ output: passOutput }),
+			],
+			// countBySlice returns: 0 (pre-review1 iteration calc), 1 (post-review1 cap check), 1 (pre-review2 iteration calc), 2 (post-review2 cap check - not reached since PASS)
+			countBySliceResponses: [0, 1, 1, 2],
+		});
+
+		const result = await runExecutePhase(ctx);
+		expect(result.status).toBe("completed");
+		// implementer + reviewer(FAIL) + fixer + reviewer(PASS)
+		expect(ctx.runtime.run as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(4);
+		expect(ctx.state.reviews.create as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
+	});
+
+	it("escalates and marks slice failed when reviewer returns FAIL at maxIterations", async () => {
+		// maxIterations = 2, so after 2 FAILs we escalate
+		const events: Parameters<NonNullable<PhaseContext["onEvent"]>>[0][] = [];
+		const ctx = makeReviewCtx({
+			// call 0: implementer, call 1: reviewer FAIL, call 2: fixer, call 3: reviewer FAIL → escalate
+			runtimeResponses: [
+				makeSuccessResult(),
+				makeSuccessResult({ output: failOutput }),
+				makeSuccessResult({ output: "Attempted fix." }),
+				makeSuccessResult({ output: failOutput }),
+			],
+			// countBySlice: 0 (pre-review1 iter), 1 (post-review1 cap check: 1 < 2, continue), 1 (pre-review2 iter), 2 (post-review2 cap check: 2 >= 2, escalate)
+			countBySliceResponses: [0, 1, 1, 2],
+			onEvent: (e) => events.push(e),
+		});
+
+		const result = await runExecutePhase(ctx);
+		expect(result.status).toBe("failed");
+		expect(result.error).toContain("failed review after 2 iteration(s)");
+		expect(events.some((e) => e.type === "review_escalated")).toBe(true);
+		expect(events.some((e) => e.type === "slice_failed")).toBe(true);
+	});
+
+	it("treats PARTIAL verdict same as FAIL for fix loop triggering", async () => {
+		const ctx = makeReviewCtx({
+			// call 0: implementer, call 1: reviewer PARTIAL, call 2: fixer, call 3: reviewer PASS
+			runtimeResponses: [
+				makeSuccessResult(),
+				makeSuccessResult({ output: partialOutput }),
+				makeSuccessResult({ output: "Fixed partials." }),
+				makeSuccessResult({ output: passOutput }),
+			],
+			countBySliceResponses: [0, 1, 1, 2],
+		});
+
+		const result = await runExecutePhase(ctx);
+		expect(result.status).toBe("completed");
+		expect(ctx.runtime.run as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(4);
+	});
+
+	it("treats unparse-able reviewer output as FAIL", async () => {
+		// reviewer outputs garbage → treated as FAIL → escalate after maxIterations
+		const ctx = makeReviewCtx({
+			runtimeResponses: [
+				makeSuccessResult(),
+				makeSuccessResult({ output: "I cannot review this" }),
+				makeSuccessResult({ output: "Fixed." }),
+				makeSuccessResult({ output: "Still cannot review" }),
+			],
+			countBySliceResponses: [0, 1, 1, 2],
+		});
+
+		const result = await runExecutePhase(ctx);
+		expect(result.status).toBe("failed");
+	});
+
+	it("emits review_started event at each iteration", async () => {
+		const events: Parameters<NonNullable<PhaseContext["onEvent"]>>[0][] = [];
+		const ctx = makeReviewCtx({
+			runtimeResponses: [
+				makeSuccessResult(),
+				makeSuccessResult({ output: failOutput }),
+				makeSuccessResult({ output: "fix" }),
+				makeSuccessResult({ output: passOutput }),
+			],
+			countBySliceResponses: [0, 1, 1, 2],
+			onEvent: (e) => events.push(e),
+		});
+
+		await runExecutePhase(ctx);
+
+		const reviewStarted = events.filter((e) => e.type === "review_started");
+		expect(reviewStarted).toHaveLength(2);
+		expect(reviewStarted[0]).toMatchObject({ type: "review_started", iteration: 1 });
+		expect(reviewStarted[1]).toMatchObject({ type: "review_started", iteration: 2 });
+	});
+
+	it("combines review costs into slice record on PASS", async () => {
+		const slicesUpdateSpy = vi.fn();
+		const sliceRecord = makeSliceRecord({ id: "slice-1", index: 0, name: "Foundation" });
+
+		const ctx = makePhaseContext({
+			reviewEnabled: true,
+			runtime: {
+				run: vi
+					.fn()
+					.mockResolvedValueOnce(makeSuccessResult({ costUsd: 1.0, durationMs: 1000 })) // implementer
+					.mockResolvedValueOnce(
+						makeSuccessResult({ output: passOutput, costUsd: 0.2, durationMs: 200 }),
+					), // reviewer
+			},
+			stateSlices: {
+				getByIndex: vi.fn().mockReturnValue(sliceRecord),
+				create: vi.fn().mockReturnValue(sliceRecord),
+				update: slicesUpdateSpy,
+				listByRun: vi.fn().mockReturnValue([]),
+			},
+			stateReviews: {
+				countBySlice: vi.fn().mockReturnValue(0),
+				create: vi.fn().mockReturnValue({ id: "rev-1" }),
+			},
+			stateRuns: { update: vi.fn() },
+		});
+
+		await runExecutePhase(ctx);
+
+		// The completed update should combine costs
+		const completedCall = slicesUpdateSpy.mock.calls.find(
+			([, update]) => update.status === "completed",
+		);
+		expect(completedCall?.[1]).toMatchObject({
+			status: "completed",
+			costUsd: 1.2,
+			durationMs: 1200,
+		});
 	});
 });

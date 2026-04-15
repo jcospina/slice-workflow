@@ -2,7 +2,13 @@ import type { ResolvedConfig } from "../../config/types";
 import type { BuiltPrompt, PromptBuildInput, PromptTemplatePhase } from "../../prompts/types";
 import type { AgentRuntime } from "../../runtime/types";
 import type { StateManager } from "../../state";
-import type { NotificationChannel, PhaseName, ResumeContext, WorkflowRun } from "../../state/types";
+import type {
+	NotificationChannel,
+	PhaseName,
+	ResumeContext,
+	ReviewVerdict,
+	WorkflowRun,
+} from "../../state/types";
 
 // --- Phase enum ---
 
@@ -137,6 +143,15 @@ export type OrchestratorEvent =
 			turnNumber: number;
 			maxTurns: number;
 	  }
+	| { type: "review_started"; runId: string; sliceIndex: number; iteration: number }
+	| {
+			type: "review_completed";
+			runId: string;
+			sliceIndex: number;
+			iteration: number;
+			verdict: ReviewVerdict;
+	  }
+	| { type: "review_escalated"; runId: string; sliceIndex: number; error: string }
 	| { type: "workflow_completed"; runId: string; totalCostUsd: number }
 	| { type: "workflow_failed"; runId: string; error: string };
 
