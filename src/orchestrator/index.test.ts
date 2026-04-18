@@ -77,6 +77,7 @@ const BASE_CONFIG = {
 		severityThreshold: "major" as const,
 		adversarial: true,
 	},
+	retry: { maxAttempts: 3, baseDelayMs: 2000, maxDelayMs: 60000 },
 };
 
 const MOCK_RUNTIME = {

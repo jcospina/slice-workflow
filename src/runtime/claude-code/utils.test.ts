@@ -10,8 +10,8 @@ vi.mock("node:child_process", () => ({
 	spawn: spawnMock,
 }));
 
-import { RuntimeError } from "../../utils/errors";
-import { runClaudeCli } from "./utils";
+import { RetryableError, RuntimeError } from "../../utils/errors";
+import { normalizeRunResult, runClaudeCli } from "./utils";
 
 describe("runClaudeCli", () => {
 	beforeEach(() => {
@@ -99,6 +99,93 @@ describe("runClaudeCli", () => {
 				method: "run",
 			}),
 		});
+	});
+});
+
+describe("normalizeRunResult", () => {
+	it("returns success result when exit code is 0", () => {
+		const result = normalizeRunResult(
+			{ stdout: "done", stderr: "", exitCode: 0, signal: null },
+			100,
+			"session-1",
+		);
+		expect(result.success).toBe(true);
+		expect(result.output).toBe("done");
+	});
+
+	it("returns failure result for non-zero exit with no rate-limit indicators", () => {
+		const result = normalizeRunResult(
+			{ stdout: "", stderr: "something went wrong", exitCode: 1, signal: null },
+			100,
+			"session-1",
+		);
+		expect(result.success).toBe(false);
+		expect(result.error).toBeTruthy();
+	});
+
+	it("throws RetryableError when stderr contains 'rate limit'", () => {
+		expect(() =>
+			normalizeRunResult(
+				{ stdout: "", stderr: "Error: rate limit exceeded", exitCode: 1, signal: null },
+				100,
+				"session-1",
+			),
+		).toThrow(RetryableError);
+	});
+
+	it("throws RetryableError when stderr contains '429'", () => {
+		expect(() =>
+			normalizeRunResult(
+				{ stdout: "", stderr: "HTTP 429 Too Many Requests", exitCode: 1, signal: null },
+				100,
+				"session-1",
+			),
+		).toThrow(RetryableError);
+	});
+
+	it("throws RetryableError when stdout contains timeout indicator", () => {
+		expect(() =>
+			normalizeRunResult(
+				{ stdout: "ETIMEDOUT connecting to api", stderr: "", exitCode: 1, signal: null },
+				100,
+				"session-1",
+			),
+		).toThrow(RetryableError);
+	});
+
+	it("parses retryAfterMs from Retry-After header in output", () => {
+		let thrown: RetryableError | undefined;
+		try {
+			normalizeRunResult(
+				{
+					stdout: "",
+					stderr: "rate limit hit. Retry-After: 30",
+					exitCode: 1,
+					signal: null,
+				},
+				100,
+				"session-1",
+			);
+		} catch (err) {
+			thrown = err as RetryableError;
+		}
+		expect(thrown).toBeInstanceOf(RetryableError);
+		expect(thrown?.retryAfterMs).toBe(30000);
+	});
+
+	it("sets retryAfterMs to null when no Retry-After header", () => {
+		let thrown: RetryableError | undefined;
+		try {
+			normalizeRunResult(
+				{ stdout: "", stderr: "429 too many requests", exitCode: 1, signal: null },
+				100,
+				"session-1",
+			);
+		} catch (err) {
+			thrown = err as RetryableError;
+		}
+		expect(thrown).toBeInstanceOf(RetryableError);
+		expect(thrown?.retryAfterMs).toBeNull();
 	});
 });
 

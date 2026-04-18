@@ -86,6 +86,7 @@ export function resolveConfig(global: GlobalConfig, project: ProjectConfig): Res
 		sliceExecution: project.sliceExecution,
 		execution: project.execution,
 		review: project.review,
+		retry: project.retry,
 	});
 }
 

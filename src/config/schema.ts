@@ -87,6 +87,27 @@ const executionSchema = z.object({
 		.describe("Maximum agentic turns per review iteration"),
 });
 
+const retrySchema = z.object({
+	maxAttempts: z
+		.number()
+		.int()
+		.min(1)
+		.optional()
+		.describe("Maximum number of retry attempts for transient failures (default: 3)"),
+	baseDelayMs: z
+		.number()
+		.int()
+		.min(0)
+		.optional()
+		.describe("Initial backoff delay in milliseconds before the first retry (default: 2000)"),
+	maxDelayMs: z
+		.number()
+		.int()
+		.min(0)
+		.optional()
+		.describe("Maximum backoff delay in milliseconds between retries (default: 60000)"),
+});
+
 const reviewSchema = z.object({
 	enabled: z
 		.boolean()
@@ -243,6 +264,9 @@ export const projectConfigSchema = z
 		review: reviewSchema
 			.optional()
 			.describe("Post-slice review loop configuration (evaluator-optimizer pattern)"),
+		retry: retrySchema
+			.optional()
+			.describe("Retry configuration for transient agent failures (rate limits, timeouts)"),
 		hooks: z
 			.array(hookDefinitionSchema)
 			.optional()
@@ -336,6 +360,29 @@ export const resolvedConfigSchema = z
 			})
 			.default({ enabled: true, maxIterations: 2, severityThreshold: "major", adversarial: true })
 			.describe("Post-slice review loop configuration"),
+		retry: z
+			.object({
+				maxAttempts: z
+					.number()
+					.int()
+					.min(1)
+					.default(3)
+					.describe("Maximum number of retry attempts for transient failures"),
+				baseDelayMs: z
+					.number()
+					.int()
+					.min(0)
+					.default(2000)
+					.describe("Initial backoff delay in milliseconds before the first retry"),
+				maxDelayMs: z
+					.number()
+					.int()
+					.min(0)
+					.default(60000)
+					.describe("Maximum backoff delay in milliseconds between retries"),
+			})
+			.default({ maxAttempts: 3, baseDelayMs: 2000, maxDelayMs: 60000 })
+			.describe("Resolved retry configuration for transient agent failures"),
 	})
 	.describe("Fully resolved configuration with all defaults applied");
 

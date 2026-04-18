@@ -109,6 +109,32 @@ function resolveEnvValue(name: string, envFileValues: Record<string, string>): s
 	throw new Error(`Missing required token '${name}' in environment or .env file`);
 }
 
+function buildSmokeFailureDetails(execution: ParsedHookExecution): string[] {
+	const details: string[] = [];
+	if (execution.hook?.command) {
+		details.push(`command: ${execution.hook.command}`);
+	}
+	if (execution.error) {
+		details.push(`error: ${execution.error}`);
+	}
+	if (execution.exitCode !== undefined) {
+		details.push(`exitCode: ${execution.exitCode === null ? "null" : execution.exitCode}`);
+	}
+	if (execution.signal) {
+		details.push(`signal: ${execution.signal}`);
+	}
+	if (execution.timedOut) {
+		details.push("timedOut: true");
+	}
+	if (execution.stderr?.trim()) {
+		details.push(`stderr: ${execution.stderr.trim()}`);
+	}
+	if (execution.stdout?.trim()) {
+		details.push(`stdout: ${execution.stdout.trim()}`);
+	}
+	return details;
+}
+
 async function runSmokeAdapter(options: {
 	adapter: HookAdapter;
 	envFilePath: string;
@@ -141,28 +167,7 @@ async function runSmokeAdapter(options: {
 		throw new Error("Smoke hook did not execute");
 	}
 	if (!execution.success) {
-		const details: string[] = [];
-		if (execution.hook?.command) {
-			details.push(`command: ${execution.hook.command}`);
-		}
-		if (execution.error) {
-			details.push(`error: ${execution.error}`);
-		}
-		if (execution.exitCode !== undefined) {
-			details.push(`exitCode: ${execution.exitCode === null ? "null" : execution.exitCode}`);
-		}
-		if (execution.signal) {
-			details.push(`signal: ${execution.signal}`);
-		}
-		if (execution.timedOut) {
-			details.push("timedOut: true");
-		}
-		if (execution.stderr?.trim()) {
-			details.push(`stderr: ${execution.stderr.trim()}`);
-		}
-		if (execution.stdout?.trim()) {
-			details.push(`stdout: ${execution.stdout.trim()}`);
-		}
+		const details = buildSmokeFailureDetails(execution);
 		throw new Error(`Smoke hook failed${details.length > 0 ? `\n${details.join("\n")}` : ""}`);
 	}
 	console.info(

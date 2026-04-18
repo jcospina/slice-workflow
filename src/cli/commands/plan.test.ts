@@ -47,6 +47,7 @@ describe("registerPlanCommand", () => {
 				severityThreshold: "major",
 				adversarial: true,
 			},
+			retry: { maxAttempts: 3, baseDelayMs: 2000, maxDelayMs: 60000 },
 		});
 		createAgentRuntimeMock.mockReturnValue({
 			provider: "claude-code",

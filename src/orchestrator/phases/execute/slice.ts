@@ -7,6 +7,7 @@ import {
 } from "../../../runtime/slice-context";
 import type { AgentRunResult } from "../../../runtime/types";
 import type { SliceRecord } from "../../../state/types";
+import { withRetry } from "../../../utils/retry";
 import type { PhaseContext } from "../types";
 import {
 	buildSliceApprovalMessage,
@@ -38,7 +39,12 @@ async function syncProgressFromWorktree(
 ): Promise<void> {
 	const src = join(worktreePath, implRelDir, slug, "PROGRESS.md");
 	const dest = join(implementationsDir, slug, "PROGRESS.md");
-	await copyFile(src, dest);
+	// Swallow errors — the agent may not have committed yet, and sync failure is non-fatal.
+	try {
+		await copyFile(src, dest);
+	} catch {
+		// intentional
+	}
 }
 
 async function buildSlicePrompts(
@@ -127,17 +133,12 @@ async function applyRunResult(
 	});
 
 	// Sync PROGRESS.md from the worktree back to the main implementations dir.
-	// Non-fatal: the agent may not have committed changes yet.
-	try {
-		await syncProgressFromWorktree(
-			worktreePath,
-			ctx.config.implementationsDir,
-			ctx.implementationsDir,
-			ctx.run.slug,
-		);
-	} catch {
-		// Intentionally swallowed — sync failure does not abort the run.
-	}
+	await syncProgressFromWorktree(
+		worktreePath,
+		ctx.config.implementationsDir,
+		ctx.implementationsDir,
+		ctx.run.slug,
+	);
 
 	return { costUsd: runResult.costUsd ?? 0, durationMs: runResult.durationMs ?? 0 };
 }
@@ -214,28 +215,32 @@ async function runSliceExecutionPass(
 	let warnFired = false;
 	const warnThreshold = Math.floor(maxTurns * 0.8);
 
-	const runResult = await ctx.runtime.run({
-		cwd: worktreePath,
-		systemPrompt: prompts.systemPrompt,
-		prompt: prompts.prompt,
-		allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
-		maxTurns,
-		onProgress: (event) => {
-			if (event.type === "turn_complete") {
-				turnsUsed = event.turnNumber;
-				if (!warnFired && event.turnNumber > warnThreshold) {
-					warnFired = true;
-					ctx.onEvent?.({
-						type: "slice_turn_warning",
-						runId: ctx.runId,
-						sliceIndex: def.index,
-						turnNumber: event.turnNumber,
-						maxTurns,
-					});
-				}
-			}
-		},
-	});
+	const runResult = await withRetry(
+		() =>
+			ctx.runtime.run({
+				cwd: worktreePath,
+				systemPrompt: prompts.systemPrompt,
+				prompt: prompts.prompt,
+				allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
+				maxTurns,
+				onProgress: (event) => {
+					if (event.type === "turn_complete") {
+						turnsUsed = event.turnNumber;
+						if (!warnFired && event.turnNumber > warnThreshold) {
+							warnFired = true;
+							ctx.onEvent?.({
+								type: "slice_turn_warning",
+								runId: ctx.runId,
+								sliceIndex: def.index,
+								turnNumber: event.turnNumber,
+								maxTurns,
+							});
+						}
+					}
+				},
+			}),
+		ctx.config.retry,
+	);
 
 	// Implementer succeeded. Run review loop if enabled before marking slice complete.
 	if (runResult.success && ctx.config.review.enabled) {
@@ -285,6 +290,128 @@ async function runSliceExecutionPass(
 	}
 
 	return applyRunResult(ctx, def, record, runResult, worktreePath, turnsUsed);
+}
+
+function buildRequestChangesEscalationOutcome(
+	ctx: PhaseContext,
+	def: SliceDefinition,
+	record: SliceRecord,
+	runResult: AgentRunResult,
+	passCost: number,
+	passDuration: number,
+	escalationError: string | null | undefined,
+): SliceOutcome {
+	const msg = escalationError ?? `Slice ${def.index} (${def.name}) review escalated.`;
+	const previous = ctx.state.slices.getByIndex(ctx.runId, def.index);
+	ctx.state.slices.update(record.id, {
+		status: "failed",
+		agentSessionId: runResult.sessionId,
+		costUsd: (previous?.costUsd ?? 0) + passCost,
+		durationMs: (previous?.durationMs ?? 0) + passDuration,
+		error: msg,
+		endedAt: new Date().toISOString(),
+	});
+	ctx.onEvent?.({
+		type: "slice_failed",
+		runId: ctx.runId,
+		sliceIndex: def.index,
+		sliceName: def.name,
+		error: msg,
+	});
+	return {
+		failure: makeFailedResult(msg, {
+			agentSessionId: runResult.sessionId,
+			costUsd: passCost,
+			durationMs: passDuration,
+		}),
+		costUsd: passCost,
+		durationMs: passDuration,
+	};
+}
+
+async function finalizeRequestChangesPass(
+	ctx: PhaseContext,
+	def: SliceDefinition,
+	sliceCtx: SliceExecutionContext,
+	record: SliceRecord,
+	worktreePath: string,
+	runResult: AgentRunResult,
+): Promise<SliceOutcome> {
+	if (!runResult.success) {
+		const msg =
+			runResult.error ??
+			runResult.output ??
+			`Slice ${def.index} (${def.name}) failed while applying requested changes.`;
+		const previous = ctx.state.slices.getByIndex(ctx.runId, def.index);
+		ctx.state.slices.update(record.id, {
+			status: "failed",
+			agentSessionId: runResult.sessionId,
+			costUsd: (previous?.costUsd ?? 0) + (runResult.costUsd ?? 0),
+			durationMs: (previous?.durationMs ?? 0) + (runResult.durationMs ?? 0),
+			error: msg,
+			endedAt: new Date().toISOString(),
+		});
+		ctx.onEvent?.({
+			type: "slice_failed",
+			runId: ctx.runId,
+			sliceIndex: def.index,
+			sliceName: def.name,
+			error: msg,
+		});
+		return {
+			failure: makeFailedResult(msg, {
+				agentSessionId: runResult.sessionId,
+				costUsd: runResult.costUsd,
+				durationMs: runResult.durationMs,
+			}),
+			costUsd: runResult.costUsd ?? 0,
+			durationMs: runResult.durationMs ?? 0,
+		};
+	}
+
+	let passCost = runResult.costUsd ?? 0;
+	let passDuration = runResult.durationMs ?? 0;
+	if (ctx.config.review.enabled) {
+		const reviewOutcome = await runReviewLoop(ctx, def, sliceCtx, worktreePath);
+		passCost += reviewOutcome.totalCostUsd;
+		passDuration += reviewOutcome.totalDurationMs;
+		if (!reviewOutcome.passed) {
+			return buildRequestChangesEscalationOutcome(
+				ctx,
+				def,
+				record,
+				runResult,
+				passCost,
+				passDuration,
+				reviewOutcome.escalationError,
+			);
+		}
+	}
+
+	const previous = ctx.state.slices.getByIndex(ctx.runId, def.index);
+	ctx.state.slices.update(record.id, {
+		status: "completed",
+		agentSessionId: runResult.sessionId,
+		costUsd: (previous?.costUsd ?? 0) + passCost,
+		durationMs: (previous?.durationMs ?? 0) + passDuration,
+		error: null,
+		endedAt: new Date().toISOString(),
+	});
+	ctx.onEvent?.({
+		type: "slice_completed",
+		runId: ctx.runId,
+		sliceIndex: def.index,
+		sliceName: def.name,
+		costUsd: passCost,
+		durationMs: passDuration,
+	});
+	await syncProgressFromWorktree(
+		worktreePath,
+		ctx.config.implementationsDir,
+		ctx.implementationsDir,
+		ctx.run.slug,
+	);
+	return { costUsd: passCost, durationMs: passDuration };
 }
 
 /**
@@ -337,116 +464,19 @@ async function runRequestChangesPass(
 		};
 	}
 
-	const runResult = await ctx.runtime.run({
-		cwd: worktreePath,
-		systemPrompt: fixPrompts.systemPrompt,
-		prompt: fixPrompts.prompt,
-		allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
-		maxTurns: getMaxTurnsForSlice(ctx.config),
-	});
-
-	if (!runResult.success) {
-		const msg =
-			runResult.error ??
-			runResult.output ??
-			`Slice ${def.index} (${def.name}) failed while applying requested changes.`;
-		const previous = ctx.state.slices.getByIndex(ctx.runId, def.index);
-		ctx.state.slices.update(record.id, {
-			status: "failed",
-			agentSessionId: runResult.sessionId,
-			costUsd: (previous?.costUsd ?? 0) + (runResult.costUsd ?? 0),
-			durationMs: (previous?.durationMs ?? 0) + (runResult.durationMs ?? 0),
-			error: msg,
-			endedAt: new Date().toISOString(),
-		});
-		ctx.onEvent?.({
-			type: "slice_failed",
-			runId: ctx.runId,
-			sliceIndex: def.index,
-			sliceName: def.name,
-			error: msg,
-		});
-		return {
-			failure: makeFailedResult(msg, {
-				agentSessionId: runResult.sessionId,
-				costUsd: runResult.costUsd,
-				durationMs: runResult.durationMs,
+	const runResult = await withRetry(
+		() =>
+			ctx.runtime.run({
+				cwd: worktreePath,
+				systemPrompt: fixPrompts.systemPrompt,
+				prompt: fixPrompts.prompt,
+				allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
+				maxTurns: getMaxTurnsForSlice(ctx.config),
 			}),
-			costUsd: runResult.costUsd ?? 0,
-			durationMs: runResult.durationMs ?? 0,
-		};
-	}
+		ctx.config.retry,
+	);
 
-	let passCost = runResult.costUsd ?? 0;
-	let passDuration = runResult.durationMs ?? 0;
-	if (ctx.config.review.enabled) {
-		const reviewOutcome = await runReviewLoop(ctx, def, sliceCtx, worktreePath);
-		passCost += reviewOutcome.totalCostUsd;
-		passDuration += reviewOutcome.totalDurationMs;
-		if (!reviewOutcome.passed) {
-			const msg =
-				reviewOutcome.escalationError ?? `Slice ${def.index} (${def.name}) review escalated.`;
-			const previous = ctx.state.slices.getByIndex(ctx.runId, def.index);
-			ctx.state.slices.update(record.id, {
-				status: "failed",
-				agentSessionId: runResult.sessionId,
-				costUsd: (previous?.costUsd ?? 0) + passCost,
-				durationMs: (previous?.durationMs ?? 0) + passDuration,
-				error: msg,
-				endedAt: new Date().toISOString(),
-			});
-			ctx.onEvent?.({
-				type: "slice_failed",
-				runId: ctx.runId,
-				sliceIndex: def.index,
-				sliceName: def.name,
-				error: msg,
-			});
-			return {
-				failure: makeFailedResult(msg, {
-					agentSessionId: runResult.sessionId,
-					costUsd: passCost,
-					durationMs: passDuration,
-				}),
-				costUsd: passCost,
-				durationMs: passDuration,
-			};
-		}
-	}
-
-	const previous = ctx.state.slices.getByIndex(ctx.runId, def.index);
-	const totalCost = (previous?.costUsd ?? 0) + passCost;
-	const totalDuration = (previous?.durationMs ?? 0) + passDuration;
-
-	ctx.state.slices.update(record.id, {
-		status: "completed",
-		agentSessionId: runResult.sessionId,
-		costUsd: totalCost,
-		durationMs: totalDuration,
-		error: null,
-		endedAt: new Date().toISOString(),
-	});
-	ctx.onEvent?.({
-		type: "slice_completed",
-		runId: ctx.runId,
-		sliceIndex: def.index,
-		sliceName: def.name,
-		costUsd: passCost,
-		durationMs: passDuration,
-	});
-
-	try {
-		await syncProgressFromWorktree(
-			worktreePath,
-			ctx.config.implementationsDir,
-			ctx.implementationsDir,
-			ctx.run.slug,
-		);
-	} catch {
-		// Intentionally swallowed — sync failure does not abort the run.
-	}
-
-	return { costUsd: passCost, durationMs: passDuration };
+	return finalizeRequestChangesPass(ctx, def, sliceCtx, record, worktreePath, runResult);
 }
 
 /** Runs the agent inside the worktree after it has been created and set up. */
