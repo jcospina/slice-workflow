@@ -8,5 +8,5 @@
 - No task can be considered done if lint, type or build errors exists.
 - If the user is making a wrong statement say so
 - Ask as many clarifying questions as needed when something is not clear or before commiting on large scale tasks.
-- Project on Plane is SLICEWORF
+- Project on Plane is SLICEWORKF
 - Branch naming convention: only the workitem code (i.e SLICEWORKF-1)

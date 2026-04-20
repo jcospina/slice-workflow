@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { ResolvedConfig } from "../../config/types";
-import { RuntimeError } from "../../utils/errors";
+import { RetryableError, RuntimeError } from "../../utils/errors";
 import type { AgentInteractiveOptions, AgentRunOptions, AgentRunResult } from "../types";
 
 export type ClaudeCodeRuntimeConfig = ResolvedConfig["providers"]["claudeCode"];
@@ -122,6 +122,19 @@ function normalizeAllowedTools(allowedTools: string[] | undefined): string[] | u
 	return allowedTools?.map((tool) => tool.trim()).filter((tool) => tool.length > 0);
 }
 
+const RATE_LIMIT_RE = /rate.?limit|too many requests|\b429\b/i;
+const TIMEOUT_RE = /timed?.?out|ETIMEDOUT|ECONNRESET/i;
+const RETRY_AFTER_RE = /retry-after[:\s]+(\d+)/i;
+
+function detectRetryAfterMs(text: string): number | null {
+	const match = RETRY_AFTER_RE.exec(text);
+	return match ? Number.parseInt(match[1], 10) * 1000 : null;
+}
+
+function isTransientFailure(text: string): boolean {
+	return RATE_LIMIT_RE.test(text) || TIMEOUT_RE.test(text);
+}
+
 export function normalizeRunResult(
 	execution: ClaudeCliProcessResult,
 	durationMs: number,
@@ -141,6 +154,10 @@ export function normalizeRunResult(
 	}
 
 	const error = buildFailureMessage(execution.exitCode, execution.signal, execution.stderr);
+
+	if (isTransientFailure(output)) {
+		throw new RetryableError(error, {}, detectRetryAfterMs(output));
+	}
 
 	return {
 		success: false,

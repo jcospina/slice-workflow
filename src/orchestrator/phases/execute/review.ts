@@ -1,6 +1,7 @@
 import type { ReviewFinding } from "../../../prompts/types";
 import type { SliceExecutionContext } from "../../../runtime/slice-context";
 import type { ReviewVerdict } from "../../../state/types";
+import { withRetry } from "../../../utils/retry";
 import type { PhaseContext } from "../types";
 import { getAllowedToolsForRuntime } from "./common";
 import { parseReviewOutput } from "./parsers";
@@ -94,13 +95,17 @@ async function runReviewIteration(
 		};
 	}
 
-	const reviewResult = await ctx.runtime.run({
-		cwd: worktreePath,
-		systemPrompt: reviewPrompts.systemPrompt,
-		prompt: reviewPrompts.prompt,
-		allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
-		maxTurns: ctx.config.execution.maxTurnsPerReview,
-	});
+	const reviewResult = await withRetry(
+		() =>
+			ctx.runtime.run({
+				cwd: worktreePath,
+				systemPrompt: reviewPrompts.systemPrompt,
+				prompt: reviewPrompts.prompt,
+				allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
+				maxTurns: ctx.config.execution.maxTurnsPerReview,
+			}),
+		ctx.config.retry,
+	);
 
 	const parsed = parseReviewOutput(reviewResult.output);
 	const verdict: ReviewVerdict = parsed?.verdict ?? "FAIL";
@@ -156,13 +161,17 @@ async function runFixIteration(
 		};
 	}
 
-	const fixResult = await ctx.runtime.run({
-		cwd: worktreePath,
-		systemPrompt: fixPrompts.systemPrompt,
-		prompt: fixPrompts.prompt,
-		allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
-		maxTurns: ctx.config.execution.maxTurnsPerSlice,
-	});
+	const fixResult = await withRetry(
+		() =>
+			ctx.runtime.run({
+				cwd: worktreePath,
+				systemPrompt: fixPrompts.systemPrompt,
+				prompt: fixPrompts.prompt,
+				allowedTools: getAllowedToolsForRuntime(ctx.runtime.provider),
+				maxTurns: ctx.config.execution.maxTurnsPerSlice,
+			}),
+		ctx.config.retry,
+	);
 	return { costUsd: fixResult.costUsd ?? 0, durationMs: fixResult.durationMs ?? 0 };
 }
 

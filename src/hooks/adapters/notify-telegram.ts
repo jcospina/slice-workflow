@@ -91,6 +91,32 @@ function escHtml(value: string): string {
 	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function handleTelegramResponseEnd(
+	parts: Buffer[],
+	statusCode: number | undefined,
+	resolve: () => void,
+	reject: (err: Error) => void,
+): void {
+	if (statusCode !== 200) {
+		reject(new Error(`Telegram API returned HTTP ${statusCode}`));
+		return;
+	}
+	let parsed: Record<string, unknown>;
+	try {
+		parsed = JSON.parse(Buffer.concat(parts).toString("utf8"));
+	} catch {
+		reject(new Error("Telegram API response was not valid JSON"));
+		return;
+	}
+	if (parsed.ok === true) {
+		resolve();
+		return;
+	}
+	const description = typeof parsed.description === "string" ? parsed.description : undefined;
+	const errorCode = typeof parsed.error_code === "number" ? parsed.error_code : undefined;
+	reject(new Error(`Telegram API error: ${description ?? String(errorCode ?? "unknown")}`));
+}
+
 function sendTelegram(text: string): Promise<void> {
 	const token = process.env.TELEGRAM_BOT_TOKEN;
 	const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -121,30 +147,7 @@ function sendTelegram(text: string): Promise<void> {
 				res.on("data", (chunk: Buffer | string) => {
 					parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
 				});
-				res.on("end", () => {
-					if (res.statusCode !== 200) {
-						reject(new Error(`Telegram API returned HTTP ${res.statusCode}`));
-						return;
-					}
-
-					let parsed: Record<string, unknown>;
-					try {
-						parsed = JSON.parse(Buffer.concat(parts).toString("utf8"));
-					} catch {
-						reject(new Error("Telegram API response was not valid JSON"));
-						return;
-					}
-
-					if (parsed.ok === true) {
-						resolve();
-						return;
-					}
-					const description =
-						typeof parsed.description === "string" ? parsed.description : undefined;
-					const errorCode = typeof parsed.error_code === "number" ? parsed.error_code : undefined;
-
-					reject(new Error(`Telegram API error: ${description ?? String(errorCode ?? "unknown")}`));
-				});
+				res.on("end", () => handleTelegramResponseEnd(parts, res.statusCode, resolve, reject));
 			},
 		);
 
